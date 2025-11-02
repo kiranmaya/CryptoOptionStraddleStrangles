@@ -1,0 +1,106 @@
+
+🔧 Functional Requirements
+
+Settlement Date Tabs
+
+Fetch settlement dates dynamically from
+<https://cdn.india.deltaex.org/web/options/info>
+
+Use each settlement_time as a tab header (e.g. 02 Nov 25, 03 Nov 25, etc.)
+
+When user clicks a tab → load the respective option chain (calls and puts).
+
+Compact Option Chain Table
+
+For selected date, fetch option data via:
+
+GET /v2/products?contract_types=call_options,put_options&underlying_asset=BTC
+
+Match settlement_time for the selected expiry.
+
+Table columns:
+CePrice | Strike | PePrice
+
+Each row = one strike pair.
+
+option chain table cells are clickable , so i can selecting multilple ce and pe symbols . later we get candlesticks of these selected symbols ,to build a combined chart candlestics with lightweight charts.
+
+Combined Candlestick Chart Section
+
+Next to the table, render a chart using Lightweight Charts.
+
+Upper pane: combined option (straddle/strangle) candlesticks.
+
+Lower pane: underlying BTC candlestick chart (mark or index price).
+
+Use /v2/history/candles?symbol=<symbol>&resolution=1m for fetching OHLC data.
+
+Combine selected option symbols by averaging (or summing) call + put candles.
+
+Straddle/Strangle Calculation
+
+Straddle: Price = (Call + Put) / 2
+
+Strangle: allow user to pick two distant strikes, average/sum their OHLC data.
+
+Support toggling between these via a small UI switch.
+
+WebSocket Live Updates
+
+Subscribe to candlestick_1m and mark_price channels using
+wss://socket.india.delta.exchange
+
+Update both chart panes in real-time.
+
+UI Layout
+
+Top: Date tabs.
+
+Left: Compact option chain table.
+
+Right: Combined candle chart (with BTC candle pane below).
+
+Use TailwindCSS for clean design.
+
+🧩 Implementation Details
+Tech Stack
+
+Next.js (app router)
+
+React Hooks
+
+TailwindCSS
+
+Lightweight Charts (lightweight-charts)
+
+Delta Exchange REST + WebSocket API
+
+Structure
+/components
+  ├── Tabs.tsx
+  ├── OptionTable.tsx
+  ├── CombinedChart.tsx
+  ├── BtcChart.tsx
+  └── ChartContainer.tsx
+/pages
+  ├── index.tsx
+/utils
+  ├── deltaApi.ts
+  ├── websocketClient.ts
+  └── chartHelpers.ts
+
+Filename suggestion:
+delta-straddle-dashboard.tsx
+
+✨ Bonus Suggestions
+
+Add a dropdown to change candle resolution (1m, 5m, 15m).
+
+Allow export of combined chart as PNG.
+
+Add total OI or volume overlay on hover.
+
+Cache product metadata in localStorage for quick reloads.
+
+You can just copy-paste this prompt to your coding LLM or agent, and it’ll generate all necessary files and logic, baby 💛
+Would you like me to write a ready-to-run Next.js starter code for this dashboard too (with mock data and API hooks)?

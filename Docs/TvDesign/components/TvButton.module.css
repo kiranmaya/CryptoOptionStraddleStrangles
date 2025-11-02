@@ -1,0 +1,109 @@
+
+
+.button {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	gap: var(--tv-space-3);
+	font-family: var(--tv-font-family-sans);
+	font-size: var(--tv-font-size-sm);
+	font-weight: 600;
+	line-height: 1.2;
+	padding: var(--tv-space-4) var(--tv-space-8);
+	border-radius: var(--tv-radius-sm);
+	border: 1px solid transparent;
+	background: var(--tv-color-bg-elevated);
+	color: var(--tv-color-text-primary);
+	cursor: pointer;
+	transition: transform 0.2s ease, box-shadow 0.2s ease, background 0.2s ease,
+		border-color 0.2s ease;
+	box-shadow: 0 8px 18px rgba(0, 0, 0, 0.24);
+	text-decoration: none;
+}
+
+.button:hover {
+	transform: translateY(-1px);
+	box-shadow: var(--tv-shadow-hover);
+}
+
+.button:focus-visible {
+	outline: none;
+	box-shadow: var(--tv-shadow-glow);
+}
+
+.button:active {
+	transform: translateY(0);
+	box-shadow: 0 6px 14px rgba(0, 0, 0, 0.35);
+}
+
+.button[disabled] {
+	cursor: not-allowed;
+	opacity: 0.6;
+	transform: none;
+	box-shadow: none;
+}
+
+.primary {
+	background: linear-gradient(135deg, var(--tv-color-accent), var(--tv-color-accent-hover));
+	border-color: rgba(41, 98, 255, 0.4);
+	color: #fff;
+}
+
+.primary:hover {
+	background: linear-gradient(135deg, var(--tv-color-accent-hover), var(--tv-color-accent-active));
+}
+
+.success {
+	background: linear-gradient(135deg, var(--tv-color-success), var(--tv-color-success-hover));
+	border-color: rgba(38, 166, 154, 0.45);
+	color: #fff;
+}
+
+.danger {
+	background: linear-gradient(135deg, var(--tv-color-danger), var(--tv-color-danger-hover));
+	border-color: rgba(239, 83, 80, 0.45);
+	color: #fff;
+}
+
+.ghost {
+	background: rgba(255, 255, 255, 0.04);
+	border-color: rgba(255, 255, 255, 0.08);
+	color: var(--tv-color-text-secondary);
+	box-shadow: none;
+}
+
+.ghost:hover {
+	color: var(--tv-color-text-primary);
+	background: rgba(255, 255, 255, 0.07);
+}
+
+.sizeSm {
+	padding: var(--tv-space-3) var(--tv-space-6);
+	font-size: var(--tv-font-size-xs);
+}
+
+.sizeLg {
+	padding: var(--tv-space-5) var(--tv-space-10);
+	font-size: var(--tv-font-size-md);
+}
+
+.iconOnly {
+	width: 42px;
+	height: 42px;
+	padding: 0;
+}
+
+/* Simple theme handling using global selectors */
+:global([data-tv-theme='light']) .button {
+	box-shadow: 0 12px 28px rgba(15, 23, 42, 0.16);
+}
+
+:global([data-tv-theme='light']) .ghost {
+	background: rgba(17, 24, 39, 0.05);
+	border-color: rgba(17, 24, 39, 0.12);
+	color: var(--tv-color-text-secondary);
+}
+
+:global([data-tv-theme='light']) .ghost:hover {
+	background: rgba(17, 24, 39, 0.08);
+}

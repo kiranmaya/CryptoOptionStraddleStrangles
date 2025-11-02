@@ -1,0 +1,47 @@
+
+
+.badge {
+	display: inline-flex;
+	align-items: center;
+	gap: var(--tv-space-3);
+	padding: var(--tv-space-3) var(--tv-space-5);
+	border-radius: 999px;
+	font-size: var(--tv-font-size-xs);
+	font-weight: 600;
+	text-transform: uppercase;
+	letter-spacing: 0.08em;
+	background: rgba(255, 255, 255, 0.04);
+	color: var(--tv-color-text-secondary);
+	border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.badge::before {
+	content: '';
+	display: block;
+	width: 6px;
+	height: 6px;
+	border-radius: 50%;
+	background: currentColor;
+}
+
+.primary {
+	color: var(--tv-color-accent);
+}
+
+.success {
+	color: var(--tv-color-success);
+}
+
+.danger {
+	color: var(--tv-color-danger);
+}
+
+.neutral {
+	color: var(--tv-color-text-secondary);
+}
+
+/* Simple theme handling using global selectors */
+:global([data-tv-theme='light']) .badge {
+	background: rgba(17, 24, 39, 0.04);
+	border-color: rgba(17, 24, 39, 0.12);
+}
