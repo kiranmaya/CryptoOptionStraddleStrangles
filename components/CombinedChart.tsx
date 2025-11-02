@@ -380,7 +380,6 @@ export const CombinedChart: React.FC<CombinedChartProps> = ({
         console.log(`[CombinedChart] Last candle:`, formattedData[formattedData.length - 1]);
 
         optionsSeriesRef.current.setData(formattedData);
-        
         // Calculate and set CCI1 data for combined options
         if (optionsCciSeriesRef.current) {
           const calculatedCCIi = calculateCCI(chartData);
