@@ -301,14 +301,14 @@ export const BtcChart: React.FC<BtcChartProps> = ({
           
           {/* Resolution Selector */}
           <div className="flex items-center space-x-2">
-            <span className="text-sm text-gray-600">Resolution:</span>
+            <span className="text-sm text-gray-900">Resolution:</span>
             <select
               value={resolution}
               onChange={(e) => handleResolutionChange(e.target.value)}
-              className="text-sm border border-gray-300 rounded-lg px-3 py-1 bg-white hover:border-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+              className="text-sm border text-amber-700 border-gray-300 rounded-lg px-3 py-1 bg-white hover:border-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
             >
               {resolutions.map((res) => (
-                <option key={res.value} value={res.value}>
+                <option key={res.value} value={res.value} className='text-amber-700'>
                   {res.label}
                 </option>
               ))}

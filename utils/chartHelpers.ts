@@ -159,21 +159,6 @@ const calculateAverageInterval = (
   return totalInterval / (allTimes.length - 1);
 };
 
-const findNextMatchingTime = (
-  data: CandlestickData[],
-  startIndex: number,
-  targetTime: number
-): number => {
-  for (let i = startIndex; i < data.length; i++) {
-    if (data[i].time === targetTime) {
-      return i;
-    }
-    if (data[i].time > targetTime) {
-      break;
-    }
-  }
-  return -1;
-};
 
 const interpolateCandle = (
   previous: CandlestickData,

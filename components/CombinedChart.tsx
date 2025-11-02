@@ -40,9 +40,7 @@ interface CombinedChartProps {
 // Helper function to synchronize BTC data with options timeframe
 const synchronizeDataWithOptions = async (
   btcData: CandlestickData[],
-  optionsData: CombinedCandleData[],
-  resolution: string
-): Promise<CandlestickData[]> => {
+  optionsData: CombinedCandleData[]): Promise<CandlestickData[]> => {
   if (optionsData.length === 0) return btcData;
   
   // Get the time range from options data
@@ -67,7 +65,6 @@ const synchronizeDataWithOptions = async (
   // Ensure both datasets have the same length by trimming to the shorter one
   const minLength = Math.min(optionsData.length, synchronizedBtcData.length);
   if (minLength > 0) {
-    const trimmedOptionsData = optionsData.slice(-minLength);
     const trimmedBtcData = synchronizedBtcData.slice(-minLength);
     console.log(`Synchronization: Final synchronized length: ${minLength} candles`);
     return trimmedBtcData;
@@ -337,7 +334,7 @@ export const CombinedChart: React.FC<CombinedChartProps> = ({
           // Use cache for better performance
           const cache = chartDataCache;
           
-          const dataPromises = allOptionSymbols.map(async (symbol, index) => {
+          const dataPromises = allOptionSymbols.map(async (symbol) => {
             const cacheKey = `${symbol}_${resolution}`;
             const cachedData = cache.get(cacheKey);
             
@@ -401,7 +398,7 @@ export const CombinedChart: React.FC<CombinedChartProps> = ({
             synchronizedBtcData = await synchronizeDataWithOptions(
               btcCandlestickData,
               combinedOptionsData,
-              resolution
+             
             );
           }
           
@@ -618,7 +615,7 @@ export const CombinedChart: React.FC<CombinedChartProps> = ({
                 onChange={(e) => setResolution(e.target.value)}
                 className="text-sm text-gray-900 border border-gray-300 rounded-lg px-3 py-1 bg-white hover:border-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
               >
-                <option value="1">1m</option>
+                <option value="1" >1m</option>
                 <option value="3">3m</option>
                 <option value="5">5m</option>
                 <option value="15">15m</option>
@@ -715,15 +712,15 @@ export const CombinedChart: React.FC<CombinedChartProps> = ({
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
             <div>
               <span className="text-gray-600">Method:</span>
-              <span className="ml-1 font-medium capitalize">{currentCalculation}</span>
+              <span className="ml-1 font-medium  text-gray-900 capitalize">{currentCalculation}</span>
             </div>
             <div>
               <span className="text-gray-600">Options Data Points:</span>
-              <span className="ml-1 font-medium">{chartData.length}</span>
+              <span className="ml-1  text-gray-900 font-medium">{chartData.length}</span>
             </div>
             <div>
               <span className="text-gray-600">Latest Options Price:</span>
-              <span className="ml-1 font-medium">
+              <span className="ml-1  text-gray-900 font-medium">
                 {chartData.length > 0 ? chartData[chartData.length - 1].close.toFixed(4) : '-'}
               </span>
             </div>
@@ -753,11 +750,11 @@ export const CombinedChart: React.FC<CombinedChartProps> = ({
               </div>
               <div>
                 <span className="text-gray-600">BTC Data Points:</span>
-                <span className="ml-1 font-medium">{btcData.length}</span>
+                <span className="ml-1 font-medium  text-gray-900">{btcData.length}</span>
               </div>
               <div>
                 <span className="text-gray-600">BTC Current Price:</span>
-                <span className="ml-1 font-medium">
+                <span className="ml-1 font-medium  text-gray-900">
                   ${btcPrice.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                 </span>
               </div>
