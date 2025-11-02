@@ -8,7 +8,7 @@ import {
   IChartApi,
   ISeriesApi,
   LineSeries,
-  UTCTimestamp,
+  UTCTimestamp
 } from 'lightweight-charts';
 import { useEffect, useRef, useState } from 'react';
 import { CalculationMethod, chartDataCache, CombinedCandleData, combineOptionData } from '../utils/chartHelpers';
