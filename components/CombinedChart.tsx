@@ -65,7 +65,13 @@ const calculateCCI = (data: CombinedCandleData[] | CandlestickData[], period: nu
     // Calculate CCI
     const currentPrice = data[i];
     const currentTP = (currentPrice.high + currentPrice.low + currentPrice.close) / 3;
-    const cci = (currentTP - sma) / (0.015 * meanDeviation);
+    let cci = (currentTP - sma) / (0.015 * meanDeviation);
+    
+    // Clamp extreme CCI values to prevent infinite/very large numbers
+    // This helps keep the visual range reasonable while maintaining calculation accuracy
+    if (!isFinite(cci) || Math.abs(cci) > 1000) {
+      cci = Math.sign(cci) * 1000;
+    }
     
     cciData.push({
       time: data[i].time,
@@ -394,7 +400,7 @@ export const CombinedChart: React.FC<CombinedChartProps> = ({
           
           // Set reference line data for CCI1 pane (+100 and -100)
           if (calculatedCCIi.length > 0 && optionsCciSeriesRef.current) {
-            // Clear existing price lines first
+            // Clear existing price lines first to prevent duplication
             optionsCciPriceLinesRef.current.forEach(line => {
               if (line && typeof line === 'object' && 'remove' in line) {
                 (line as { remove: () => void }).remove();
@@ -402,14 +408,14 @@ export const CombinedChart: React.FC<CombinedChartProps> = ({
             });
             optionsCciPriceLinesRef.current = [];
             
-            // Create new price lines for CCI1 (+100 and -100)
+            // Create new price lines for CCI1 (+100 and -100) with unique titles
             const plus100Line = optionsCciSeriesRef.current.createPriceLine({
               price: 100,
               color: '#ef4444',
               lineWidth: 1,
               lineStyle: 2, // Dashed line
               axisLabelVisible: true,
-              title: '+100',
+              title: 'CCI1 +100',
             });
             
             const minus100Line = optionsCciSeriesRef.current.createPriceLine({
@@ -418,7 +424,7 @@ export const CombinedChart: React.FC<CombinedChartProps> = ({
               lineWidth: 1,
               lineStyle: 2, // Dashed line
               axisLabelVisible: true,
-              title: '-100',
+              title: 'CCI1 -100',
             });
             
             // Store references to the price lines
@@ -481,7 +487,7 @@ export const CombinedChart: React.FC<CombinedChartProps> = ({
         
         // Create price lines for CCI2 (+100 and -100)
         if (calculatedBtcCCI.length > 0 && btcCciSeriesRef.current) {
-          // Clear existing price lines first
+          // Clear existing price lines first to prevent duplication
           btcCciPriceLinesRef.current.forEach(line => {
             if (line && typeof line === 'object' && 'remove' in line) {
               (line as { remove: () => void }).remove();
@@ -489,14 +495,14 @@ export const CombinedChart: React.FC<CombinedChartProps> = ({
           });
           btcCciPriceLinesRef.current = [];
           
-          // Create new price lines for CCI2 (+100 and -100)
+          // Create new price lines for CCI2 (+100 and -100) with unique titles
           const plus100Line1 = btcCciSeriesRef.current.createPriceLine({
             price: 100,
             color: '#ef4444',
             lineWidth: 1,
             lineStyle: 2, // Dashed line
             axisLabelVisible: true,
-            title: '+100',
+            title: 'CCI2 +100',
           });
           
           const minus100Line1 = btcCciSeriesRef.current.createPriceLine({
@@ -505,7 +511,7 @@ export const CombinedChart: React.FC<CombinedChartProps> = ({
             lineWidth: 1,
             lineStyle: 2, // Dashed line
             axisLabelVisible: true,
-            title: '-100',
+            title: 'CCI2 -100',
           });
           
           // Store references to the price lines
