@@ -1,4 +1,4 @@
-// Combined Chart Component for Straddle/Strangle Visualization with BTC Price
+// Combined Chart Component for Straddle/Strangle Visualization with BTC Price and Dual CCI
 
 import {
   CandlestickSeries,
@@ -7,6 +7,7 @@ import {
   CrosshairMode,
   IChartApi,
   ISeriesApi,
+  LineSeries,
   UTCTimestamp,
 } from 'lightweight-charts';
 import { useEffect, useRef, useState } from 'react';
@@ -36,6 +37,44 @@ interface CombinedChartProps {
   calculationMethod: CalculationMethod;
   onCalculationChange: (method: CalculationMethod) => void;
 }
+
+// CCI Data interface
+interface CCIData {
+  time: number;
+  value: number;
+}
+
+// Helper function to calculate CCI (Commodity Channel Index)
+const calculateCCI = (data: CombinedCandleData[] | CandlestickData[], period: number = 20): CCIData[] => {
+  if (data.length < period + 1) return [];
+
+  const cciData: CCIData[] = [];
+  
+  for (let i = period - 1; i < data.length; i++) {
+    const slice = data.slice(i - period + 1, i + 1);
+    
+    // Calculate Typical Price (TP) for each period
+    const typicalPrices = slice.map(candle => (candle.high + candle.low + candle.close) / 3);
+    
+    // Calculate Simple Moving Average of Typical Price
+    const sma = typicalPrices.reduce((sum, tp) => sum + tp, 0) / typicalPrices.length;
+    
+    // Calculate Mean Deviation
+    const meanDeviation = typicalPrices.reduce((sum, tp) => sum + Math.abs(tp - sma), 0) / typicalPrices.length;
+    
+    // Calculate CCI
+    const currentPrice = data[i];
+    const currentTP = (currentPrice.high + currentPrice.low + currentPrice.close) / 3;
+    const cci = (currentTP - sma) / (0.015 * meanDeviation);
+    
+    cciData.push({
+      time: data[i].time,
+      value: cci
+    });
+  }
+  
+  return cciData;
+};
 
 // Helper function to synchronize BTC data with options timeframe
 const synchronizeDataWithOptions = async (
@@ -82,11 +121,17 @@ export const CombinedChart: React.FC<CombinedChartProps> = ({
   const chartRef = useRef<IChartApi | null>(null);
   const optionsSeriesRef = useRef<ISeriesApi<'Candlestick'> | null>(null);
   const btcSeriesRef = useRef<ISeriesApi<'Candlestick'> | null>(null);
+  const optionsCciSeriesRef = useRef<ISeriesApi<'Line'> | null>(null);
+  const btcCciSeriesRef = useRef<ISeriesApi<'Line'> | null>(null);
+  const optionsCciPriceLinesRef = useRef<unknown[]>([]);
+  const btcCciPriceLinesRef = useRef<unknown[]>([]);
   const [loading, setLoading] = useState(false);
   const [btcLoading, setBtcLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [chartData, setChartData] = useState<CombinedCandleData[]>([]);
   const [btcData, setBtcData] = useState<CandlestickData[]>([]);
+  const [optionsCciData, setOptionsCciData] = useState<CCIData[]>([]);
+  const [btcCciData, setBtcCciData] = useState<CCIData[]>([]);
   const [currentCalculation, setCurrentCalculation] = useState<CalculationMethod>(calculationMethod);
   const [resolution, setResolution] = useState('5');
   const [btcPrice, setBtcPrice] = useState<number>(0);
@@ -117,10 +162,10 @@ export const CombinedChart: React.FC<CombinedChartProps> = ({
 
     const theme = resolveTheme();
 
-    // Initialize chart with multiple panes support
+    // Initialize chart with multiple panes support (4 panes in new order)
     const chart = createChart(container, {
       width: container.clientWidth,
-      height: 800, // Will be properly sized with pane heights
+      height: 1000, // Increased height for 4 panes
       layout: {
         background: { type: ColorType.Solid, color: theme.background },
         textColor: theme.text,
@@ -148,7 +193,9 @@ export const CombinedChart: React.FC<CombinedChartProps> = ({
       },
     });
 
-    // Add combined options candlestick series (pane 0 - top)
+    
+    
+    // Combined options candlestick series (will move to pane 0)
     const optionsSeries = chart.addSeries(CandlestickSeries, {
       upColor: '#10b981',
       downColor: '#ef4444',
@@ -156,9 +203,16 @@ export const CombinedChart: React.FC<CombinedChartProps> = ({
       borderDownColor: '#ef4444',
       wickUpColor: '#10b981',
       wickDownColor: '#ef4444',
-    }, 0); // Pane index 0
+    }, 0);
 
-    // Add BTC candlestick series (pane 1 - bottom)  
+    // CCI for combined options (will move to pane 1)
+    const optionsCciSeries = chart.addSeries(LineSeries, {
+      color: '#8b5cf6',
+      lineWidth: 2,
+      title: 'CCI1 (Combined)',
+    }, 1);
+
+    // BTC candlestick series (will move to pane 2)
     const btcSeries = chart.addSeries(CandlestickSeries, {
       upColor: '#3b82f6',
       downColor: '#ef4444',
@@ -166,29 +220,42 @@ export const CombinedChart: React.FC<CombinedChartProps> = ({
       borderDownColor: '#ef4444',
       wickUpColor: '#3b82f6',
       wickDownColor: '#ef4444',
-    }, 1); // Pane index 1
+    }, 2);
+
+    // CCI for BTC (will move to pane 3)
+    const btcCciSeries = chart.addSeries(LineSeries, {
+      color: '#f59e0b',
+      lineWidth: 2,
+      title: 'CCI2 (BTC)',
+    }, 3);
+
+   
 
     chartRef.current = chart;
     optionsSeriesRef.current = optionsSeries;
+    optionsCciSeriesRef.current = optionsCciSeries;
     btcSeriesRef.current = btcSeries;
+    btcCciSeriesRef.current = btcCciSeries;
 
-    // Set pane heights with proper initialization
+    // Set pane heights for 4 panes in new order
     const initializePanes = () => {
       const panes = chart.panes();
       console.log(`[CombinedChart] Found ${panes.length} panes`);
       
-      if (panes.length >= 2) {
-        // Set equal heights for both panes to ensure proper display
-        const paneHeight = 400; // Each pane gets 400px for better balance
-        panes[0].setHeight(paneHeight);
-        panes[1].setHeight(paneHeight);
-        
-        console.log('[CombinedChart] Set pane heights:', paneHeight);
+      if (panes.length >= 4) {
+        // Set heights for 4 panes in new order
+        const paneHeights = [250, 250, 250, 250]; // Options, CCI1, BTC, CCI2
+        panes.forEach((pane, index) => {
+          if (paneHeights[index]) {
+            pane.setHeight(paneHeights[index]);
+            console.log(`[CombinedChart] Set pane ${index} height: ${paneHeights[index]}px`);
+          }
+        });
         
         // Fit content and auto-scale price scales
         chart.timeScale().fitContent();
         
-        // Auto-scale both price scales
+        // Auto-scale all price scales
         panes.forEach((pane, index) => {
           console.log(`[CombinedChart] Auto-scaling pane ${index}`);
           pane.priceScale('right').applyOptions({ autoScale: true });
@@ -229,9 +296,13 @@ export const CombinedChart: React.FC<CombinedChartProps> = ({
             // Re-initialize panes after resize to maintain proper heights
             setTimeout(() => {
               const panes = chart.panes();
-              if (panes.length >= 2) {
-                panes[0].setHeight(400);
-                panes[1].setHeight(400);
+              if (panes.length >= 4) {
+                const paneHeights = [280, 220, 250, 250];
+                panes.forEach((pane, index) => {
+                  if (paneHeights[index]) {
+                    pane.setHeight(paneHeights[index]);
+                  }
+                });
                 chart.timeScale().fitContent();
                 panes.forEach(pane => {
                   pane.priceScale('right').applyOptions({ autoScale: true });
@@ -288,7 +359,7 @@ export const CombinedChart: React.FC<CombinedChartProps> = ({
 
       // Wait for panes to be properly initialized
       const panes = chartRef.current.panes();
-      if (panes.length < 2) {
+      if (panes.length < 4) {
         console.log('[CombinedChart] Waiting for panes to initialize...');
         setTimeout(() => setOptionsData(), 200);
         return;
@@ -297,7 +368,7 @@ export const CombinedChart: React.FC<CombinedChartProps> = ({
       if (chartData.length > 0) {
         console.log(`[CombinedChart] Setting ${chartData.length} data points to chart`);
         
-        const formattedData = chartData.slice(-200).map(candle => ({
+        const formattedData = chartData.map(candle => ({
           time: candle.time as UTCTimestamp,
           open: candle.open,
           high: candle.high,
@@ -310,11 +381,60 @@ export const CombinedChart: React.FC<CombinedChartProps> = ({
 
         optionsSeriesRef.current.setData(formattedData);
         
+        // Calculate and set CCI1 data for combined options
+        if (optionsCciSeriesRef.current) {
+          const calculatedCCIi = calculateCCI(chartData);
+          setOptionsCciData(calculatedCCIi);
+          
+          const cciFormattedData = calculatedCCIi.map(cci => ({
+            time: cci.time as UTCTimestamp,
+            value: cci.value,
+          }));
+          
+          optionsCciSeriesRef.current.setData(cciFormattedData);
+          
+          // Set reference line data for CCI1 pane (+100 and -100)
+          if (calculatedCCIi.length > 0 && optionsCciSeriesRef.current) {
+            // Clear existing price lines first
+            optionsCciPriceLinesRef.current.forEach(line => {
+              if (line && typeof line === 'object' && 'remove' in line) {
+                (line as { remove: () => void }).remove();
+              }
+            });
+            optionsCciPriceLinesRef.current = [];
+            
+            // Create new price lines for CCI1 (+100 and -100)
+            const plus100Line = optionsCciSeriesRef.current.createPriceLine({
+              price: 100,
+              color: '#ef4444',
+              lineWidth: 1,
+              lineStyle: 2, // Dashed line
+              axisLabelVisible: true,
+              title: '+100',
+            });
+            
+            const minus100Line = optionsCciSeriesRef.current.createPriceLine({
+              price: -100,
+              color: '#10b981',
+              lineWidth: 1,
+              lineStyle: 2, // Dashed line
+              axisLabelVisible: true,
+              title: '-100',
+            });
+            
+            // Store references to the price lines
+            optionsCciPriceLinesRef.current = [plus100Line, minus100Line];
+            
+            console.log(`[CombinedChart] CCI1 price lines created successfully`);
+          }
+          console.log(`[CombinedChart] Set ${calculatedCCIi.length} CCI1 data points`);
+        }
+        
         // Force chart to fit content and auto-scale price scales
         setTimeout(() => {
           if (chartRef.current) {
             chartRef.current.timeScale().fitContent();
-            // Auto-scale both price scales to fit the data
+            // Auto-scale all price scales to fit the data
             const panes = chartRef.current.panes();
             panes.forEach(pane => {
               pane.priceScale('right').applyOptions({ autoScale: true });
@@ -324,6 +444,9 @@ export const CombinedChart: React.FC<CombinedChartProps> = ({
       } else {
         console.log('[CombinedChart] No data to display');
         optionsSeriesRef.current.setData([]);
+        if (optionsCciSeriesRef.current) {
+          optionsCciSeriesRef.current.setData([]);
+        }
       }
     };
 
@@ -344,6 +467,55 @@ export const CombinedChart: React.FC<CombinedChartProps> = ({
 
       btcSeriesRef.current.setData(formattedData);
       
+      // Calculate CCI2 for BTC
+      if (btcCciSeriesRef.current) {
+        const calculatedBtcCCI = calculateCCI(btcData);
+        setBtcCciData(calculatedBtcCCI);
+        
+        const btcCciFormattedData = calculatedBtcCCI.map(cci => ({
+          time: cci.time as UTCTimestamp,
+          value: cci.value,
+        }));
+        
+        btcCciSeriesRef.current.setData(btcCciFormattedData);
+        console.log(`[CombinedChart] Set ${calculatedBtcCCI.length} CCI2 (BTC) data points`);
+        
+        // Create price lines for CCI2 (+100 and -100)
+        if (calculatedBtcCCI.length > 0 && btcCciSeriesRef.current) {
+          // Clear existing price lines first
+          btcCciPriceLinesRef.current.forEach(line => {
+            if (line && typeof line === 'object' && 'remove' in line) {
+              (line as { remove: () => void }).remove();
+            }
+          });
+          btcCciPriceLinesRef.current = [];
+          
+          // Create new price lines for CCI2 (+100 and -100)
+          const plus100Line1 = btcCciSeriesRef.current.createPriceLine({
+            price: 100,
+            color: '#ef4444',
+            lineWidth: 1,
+            lineStyle: 2, // Dashed line
+            axisLabelVisible: true,
+            title: '+100',
+          });
+          
+          const minus100Line1 = btcCciSeriesRef.current.createPriceLine({
+            price: -100,
+            color: '#10b981',
+            lineWidth: 1,
+            lineStyle: 2, // Dashed line
+            axisLabelVisible: true,
+            title: '-100',
+          });
+          
+          // Store references to the price lines
+          btcCciPriceLinesRef.current = [plus100Line1, minus100Line1];
+          
+          console.log(`[CombinedChart] CCI2 price lines created successfully`);
+        }
+      }
+      
       // Auto-scale price scales when BTC data is loaded
       setTimeout(() => {
         if (chartRef.current) {
@@ -355,6 +527,9 @@ export const CombinedChart: React.FC<CombinedChartProps> = ({
       }, 100);
     } else {
       btcSeriesRef.current.setData([]);
+      if (btcCciSeriesRef.current) {
+        btcCciSeriesRef.current.setData([]);
+      }
     }
   }, [btcData]);
 
@@ -371,6 +546,8 @@ export const CombinedChart: React.FC<CombinedChartProps> = ({
         if (selections.length === 0) {
           setChartData([]);
           setBtcData([]);
+          setOptionsCciData([]);
+          setBtcCciData([]);
           return;
         }
 
@@ -452,7 +629,6 @@ export const CombinedChart: React.FC<CombinedChartProps> = ({
             synchronizedBtcData = await synchronizeDataWithOptions(
               btcCandlestickData,
               combinedOptionsData,
-             
             );
           }
           
@@ -496,6 +672,8 @@ export const CombinedChart: React.FC<CombinedChartProps> = ({
         setError(`Failed to load chart data: ${err instanceof Error ? err.message : 'Unknown error'}`);
         setChartData([]);
         setBtcData([]);
+        setOptionsCciData([]);
+        setBtcCciData([]);
       } finally {
         setLoading(false);
         setBtcLoading(false);
@@ -572,7 +750,7 @@ export const CombinedChart: React.FC<CombinedChartProps> = ({
       console.log('[CombinedChart] Resetting and scaling chart');
       chartRef.current.timeScale().fitContent();
       
-      // Auto-scale both price scales
+      // Auto-scale all price scales
       const panes = chartRef.current.panes();
       panes.forEach(pane => {
         pane.priceScale('right').applyOptions({ autoScale: true });
@@ -640,7 +818,7 @@ export const CombinedChart: React.FC<CombinedChartProps> = ({
       <div className="p-4 border-b border-gray-200">
         <div className="flex items-center justify-between">
           <div>
-            <h2 className="text-lg font-semibold text-gray-900">Combined Options + BTC Chart</h2>
+            <h2 className="text-lg font-semibold text-gray-900">Combined Options + BTC Chart with Dual CCI</h2>
             <div className="flex items-center space-x-4 mt-1">
               <p className="text-sm text-gray-600">{getChartTitle()}</p>
               {btcPrice > 0 && (
@@ -737,6 +915,18 @@ export const CombinedChart: React.FC<CombinedChartProps> = ({
               {btcData.length} BTC candles
             </div>
           )}
+          
+          {optionsCciData.length > 0 && (
+            <div className="text-xs text-gray-600">
+              {optionsCciData.length} CCI1 points
+            </div>
+          )}
+          
+          {btcCciData.length > 0 && (
+            <div className="text-xs text-gray-600">
+              {btcCciData.length} CCI2 points
+            </div>
+          )}
         </div>
       </div>
 
@@ -755,7 +945,7 @@ export const CombinedChart: React.FC<CombinedChartProps> = ({
         ) : (
           <div
             ref={chartContainerRef}
-            className="w-full h-[700px] rounded-lg border border-gray-200"
+            className="w-full h-[900px] rounded-lg border border-gray-200"
           />
         )}
       </div>
@@ -813,10 +1003,74 @@ export const CombinedChart: React.FC<CombinedChartProps> = ({
                 </span>
               </div>
               <div>
-                <span className="text-gray-600">BTC 24h Change:</span>
+                <span className="text-gray-600">BTC Price Change:</span>
                 <span className={`ml-1 font-medium ${getBtcPriceChangeColor()}`}>
                   {Math.abs(btcPriceChange) > 0.01 ? `${btcPriceChange.toFixed(2)}%` : '-'}
                 </span>
+              </div>
+            </div>
+          )}
+          
+          {/* CCI1 Info - Combined Options */}
+          {optionsCciData.length > 0 && (
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm mt-4 pt-4 border-t border-gray-200">
+              <div>
+                <span className="text-gray-600">CCI1 Indicator:</span>
+                <span className="ml-1 font-medium text-gray-900">CCI (Combined Options)</span>
+              </div>
+              <div>
+                <span className="text-gray-600">CCI1 Data Points:</span>
+                <span className="ml-1 font-medium text-gray-900">{optionsCciData.length}</span>
+              </div>
+              <div>
+                <span className="text-gray-600">Latest CCI1:</span>
+                <span className={`ml-1 font-medium ${
+                  optionsCciData.length > 0 
+                    ? optionsCciData[optionsCciData.length - 1].value > 100 
+                      ? 'text-red-600' 
+                      : optionsCciData[optionsCciData.length - 1].value < -100 
+                        ? 'text-green-600' 
+                        : 'text-gray-600'
+                    : 'text-gray-600'
+                }`}>
+                  {optionsCciData.length > 0 ? optionsCciData[optionsCciData.length - 1].value.toFixed(2) : '-'}
+                </span>
+              </div>
+              <div>
+                <span className="text-gray-600">CCI1 Period:</span>
+                <span className="ml-1 font-medium text-gray-900">20</span>
+              </div>
+            </div>
+          )}
+          
+          {/* CCI2 Info - BTC */}
+          {btcCciData.length > 0 && (
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm mt-4 pt-4 border-t border-gray-200">
+              <div>
+                <span className="text-gray-600">CCI2 Indicator:</span>
+                <span className="ml-1 font-medium text-gray-900">CCI (BTC)</span>
+              </div>
+              <div>
+                <span className="text-gray-600">CCI2 Data Points:</span>
+                <span className="ml-1 font-medium text-gray-900">{btcCciData.length}</span>
+              </div>
+              <div>
+                <span className="text-gray-600">Latest CCI2:</span>
+                <span className={`ml-1 font-medium ${
+                  btcCciData.length > 0 
+                    ? btcCciData[btcCciData.length - 1].value > 100 
+                      ? 'text-red-600' 
+                      : btcCciData[btcCciData.length - 1].value < -100 
+                        ? 'text-green-600' 
+                        : 'text-gray-600'
+                    : 'text-gray-600'
+                }`}>
+                  {btcCciData.length > 0 ? btcCciData[btcCciData.length - 1].value.toFixed(2) : '-'}
+                </span>
+              </div>
+              <div>
+                <span className="text-gray-600">CCI2 Period:</span>
+                <span className="ml-1 font-medium text-gray-900">20</span>
               </div>
             </div>
           )}

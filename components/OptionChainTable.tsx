@@ -217,8 +217,8 @@ export const OptionChainTable: React.FC<OptionChainTableProps> = ({
     if (currentStrikeIndex === -1) return optionData.calls;
     
     // Calculate range: current strike ± 12 strikes
-    const startIndex = Math.max(0, currentStrikeIndex - 12);
-    const endIndex = Math.min(allCalls.length - 1, currentStrikeIndex + 12);
+    const startIndex = Math.max(0, currentStrikeIndex - 20);
+    const endIndex = Math.min(allCalls.length - 1, currentStrikeIndex + 20);
     
     return allCalls.slice(startIndex, endIndex + 1);
   }, [optionData.calls, currentStrike]);
