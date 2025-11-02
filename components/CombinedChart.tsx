@@ -120,7 +120,7 @@ export const CombinedChart: React.FC<CombinedChartProps> = ({
     // Initialize chart with multiple panes support
     const chart = createChart(container, {
       width: container.clientWidth,
-      height: 1500, // Increased height to accommodate two panes
+      height: 800, // Will be properly sized with pane heights
       layout: {
         background: { type: ColorType.Solid, color: theme.background },
         textColor: theme.text,
@@ -172,19 +172,48 @@ export const CombinedChart: React.FC<CombinedChartProps> = ({
     optionsSeriesRef.current = optionsSeries;
     btcSeriesRef.current = btcSeries;
 
-    // Set pane heights - top pane (options) gets more space
-    setTimeout(() => {
+    // Set pane heights with proper initialization
+    const initializePanes = () => {
       const panes = chart.panes();
+      console.log(`[CombinedChart] Found ${panes.length} panes`);
+      
       if (panes.length >= 2) {
-        panes[0].setHeight(600); // Top pane for combined options
-        panes[1].setHeight(600); // Bottom pane for BTC
+        // Set equal heights for both panes to ensure proper display
+        const paneHeight = 400; // Each pane gets 400px for better balance
+        panes[0].setHeight(paneHeight);
+        panes[1].setHeight(paneHeight);
+        
+        console.log('[CombinedChart] Set pane heights:', paneHeight);
+        
+        // Fit content and auto-scale price scales
         chart.timeScale().fitContent();
-        // Auto-scale price scales initially
-        panes.forEach(pane => {
+        
+        // Auto-scale both price scales
+        panes.forEach((pane, index) => {
+          console.log(`[CombinedChart] Auto-scaling pane ${index}`);
           pane.priceScale('right').applyOptions({ autoScale: true });
         });
+        
+        return true;
+      } else {
+        console.log(`[CombinedChart] Only ${panes.length} panes found, retrying...`);
+        return false;
       }
-    }, 100);
+    };
+
+    // Try immediate initialization first
+    if (!initializePanes()) {
+      // Retry with longer timeout for proper chart initialization
+      setTimeout(() => {
+        if (initializePanes()) {
+          console.log('[CombinedChart] Panes initialized successfully on retry');
+        } else {
+          console.log('[CombinedChart] Failed to initialize panes after retry');
+        }
+      }, 300);
+    } else {
+      console.log('[CombinedChart] Panes initialized immediately');
+    }
 
     // Handle resize
     const resizeObserver = new ResizeObserver((entries) => {
@@ -196,6 +225,19 @@ export const CombinedChart: React.FC<CombinedChartProps> = ({
               width: Math.floor(width),
               height: Math.floor(height),
             });
+            
+            // Re-initialize panes after resize to maintain proper heights
+            setTimeout(() => {
+              const panes = chart.panes();
+              if (panes.length >= 2) {
+                panes[0].setHeight(400);
+                panes[1].setHeight(400);
+                chart.timeScale().fitContent();
+                panes.forEach(pane => {
+                  pane.priceScale('right').applyOptions({ autoScale: true });
+                });
+              }
+            }, 100);
           }
         }
       });
@@ -241,39 +283,51 @@ export const CombinedChart: React.FC<CombinedChartProps> = ({
   }, []);
 
   useEffect(() => {
-    if (!optionsSeriesRef.current) return;
+    const setOptionsData = async () => {
+      if (!optionsSeriesRef.current || !chartRef.current) return;
 
-    if (chartData.length > 0) {
-      console.log(`[CombinedChart] Setting ${chartData.length} data points to chart`);
-      
-      const formattedData = chartData.slice(-200).map(candle => ({
-        time: candle.time as UTCTimestamp,
-        open: candle.open,
-        high: candle.high,
-        low: candle.low,
-        close: candle.close,
-      }));
+      // Wait for panes to be properly initialized
+      const panes = chartRef.current.panes();
+      if (panes.length < 2) {
+        console.log('[CombinedChart] Waiting for panes to initialize...');
+        setTimeout(() => setOptionsData(), 200);
+        return;
+      }
 
-      console.log(`[CombinedChart] First candle:`, formattedData[0]);
-      console.log(`[CombinedChart] Last candle:`, formattedData[formattedData.length - 1]);
+      if (chartData.length > 0) {
+        console.log(`[CombinedChart] Setting ${chartData.length} data points to chart`);
+        
+        const formattedData = chartData.slice(-200).map(candle => ({
+          time: candle.time as UTCTimestamp,
+          open: candle.open,
+          high: candle.high,
+          low: candle.low,
+          close: candle.close,
+        }));
 
-      optionsSeriesRef.current.setData(formattedData);
-      
-      // Force chart to fit content and auto-scale price scales
-      setTimeout(() => {
-        if (chartRef.current) {
-          chartRef.current.timeScale().fitContent();
-          // Auto-scale both price scales to fit the data
-          const panes = chartRef.current.panes();
-          panes.forEach(pane => {
-            pane.priceScale('right').applyOptions({ autoScale: true });
-          });
-        }
-      }, 100);
-    } else {
-      console.log('[CombinedChart] No data to display');
-      optionsSeriesRef.current.setData([]);
-    }
+        console.log(`[CombinedChart] First candle:`, formattedData[0]);
+        console.log(`[CombinedChart] Last candle:`, formattedData[formattedData.length - 1]);
+
+        optionsSeriesRef.current.setData(formattedData);
+        
+        // Force chart to fit content and auto-scale price scales
+        setTimeout(() => {
+          if (chartRef.current) {
+            chartRef.current.timeScale().fitContent();
+            // Auto-scale both price scales to fit the data
+            const panes = chartRef.current.panes();
+            panes.forEach(pane => {
+              pane.priceScale('right').applyOptions({ autoScale: true });
+            });
+          }
+        }, 100);
+      } else {
+        console.log('[CombinedChart] No data to display');
+        optionsSeriesRef.current.setData([]);
+      }
+    };
+
+    setOptionsData();
   }, [chartData]);
 
   useEffect(() => {
