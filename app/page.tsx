@@ -19,7 +19,7 @@ export default function Home() {
         <div className="bg-white rounded-lg shadow-lg p-8">
           <div className="mb-8">
             <h1 className="text-4xl font-bold text-gray-900 mb-4">
-              Delta Exchange Options Dashboard
+              BTC Options Dashboard
             </h1>
             <p className="text-lg text-gray-600 mb-6">
               Real-time options straddle & strangle analysis with Bitcoin price tracking
