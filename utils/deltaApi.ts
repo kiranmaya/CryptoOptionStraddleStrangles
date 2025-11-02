@@ -133,9 +133,8 @@ export const formatSettlementDate = (dateString: string): string => {
   return `${day} ${month} ${year}`;
 };
 
-const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
-const fetchWithRetry = async (url: string, options: RequestInit = {}, maxRetries: number = 1) => {
+const fetchWithRetry = async (url: string, options: RequestInit = {}) => {
   // Single attempt fetch - no retries
   try {
     const response = await fetch(url, {
@@ -225,20 +224,6 @@ export const fetchOptionChainData = async (settlementTime: string): Promise<Opti
 
 
 // Helper function to test API connectivity
-const testApiEndpoint = async (url: string): Promise<boolean> => {
-  try {
-    const response = await fetch(url, {
-      method: 'GET',
-      headers: {
-        'User-Agent': 'Delta-Straddle-Dashboard/1.0',
-        'Accept': 'application/json',
-      },
-    });
-    return response.ok;
-  } catch {
-    return false;
-  }
-};
 
 export const fetchCandlestickData = async (
   symbol: string,

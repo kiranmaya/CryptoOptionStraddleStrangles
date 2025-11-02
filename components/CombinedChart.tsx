@@ -1,4 +1,4 @@
-// Combined Chart Component for Straddle/Strangle Visualization
+// Combined Chart Component for Straddle/Strangle Visualization with BTC Price
 
 import {
   CandlestickSeries,
@@ -10,8 +10,8 @@ import {
   UTCTimestamp,
 } from 'lightweight-charts';
 import { useEffect, useRef, useState } from 'react';
-import { CalculationMethod, CombinedCandleData, combineOptionData } from '../utils/chartHelpers';
-import { fetchCandlestickData } from '../utils/deltaApi';
+import { CalculationMethod, chartDataCache, CombinedCandleData, combineOptionData } from '../utils/chartHelpers';
+import { CandlestickData, fetchBTCPrice, fetchCandlestickData } from '../utils/deltaApi';
 import { useDeltaWebSocket } from '../utils/websocketClient';
 import { Selection } from './OptionChainTable';
 
@@ -25,28 +25,77 @@ interface CandlestickUpdate {
   volume?: number;
 }
 
+interface PriceUpdate {
+  symbol: string;
+  price: number;
+  timestamp: number;
+}
+
 interface CombinedChartProps {
   selections: Selection[];
   calculationMethod: CalculationMethod;
-  resolution: string;
   onCalculationChange: (method: CalculationMethod) => void;
 }
+
+// Helper function to synchronize BTC data with options timeframe
+const synchronizeDataWithOptions = async (
+  btcData: CandlestickData[],
+  optionsData: CombinedCandleData[],
+  resolution: string
+): Promise<CandlestickData[]> => {
+  if (optionsData.length === 0) return btcData;
+  
+  // Get the time range from options data
+  const optionsStartTime = Math.min(...optionsData.map(c => c.time));
+  const optionsEndTime = Math.max(...optionsData.map(c => c.time));
+  
+  console.log(`Synchronization: Options timeframe ${new Date(optionsStartTime * 1000).toISOString()} to ${new Date(optionsEndTime * 1000).toISOString()}`);
+  
+  // Filter BTC data to match options timeframe
+  const synchronizedBtcData = btcData.filter(candle =>
+    candle.time >= optionsStartTime && candle.time <= optionsEndTime
+  );
+  
+  // If no overlapping data, use the last N candles to match options count
+  if (synchronizedBtcData.length === 0) {
+    const targetLength = Math.min(optionsData.length, 100);
+    const fallbackData = btcData.slice(-targetLength);
+    console.log(`Synchronization: Using last ${targetLength} BTC candles as fallback`);
+    return fallbackData;
+  }
+  
+  // Ensure both datasets have the same length by trimming to the shorter one
+  const minLength = Math.min(optionsData.length, synchronizedBtcData.length);
+  if (minLength > 0) {
+    const trimmedOptionsData = optionsData.slice(-minLength);
+    const trimmedBtcData = synchronizedBtcData.slice(-minLength);
+    console.log(`Synchronization: Final synchronized length: ${minLength} candles`);
+    return trimmedBtcData;
+  }
+  
+  return synchronizedBtcData;
+};
 
 export const CombinedChart: React.FC<CombinedChartProps> = ({
   selections,
   calculationMethod,
-  resolution,
   onCalculationChange
 }) => {
   const chartContainerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
-  const seriesRef = useRef<ISeriesApi<'Candlestick'> | null>(null);
+  const optionsSeriesRef = useRef<ISeriesApi<'Candlestick'> | null>(null);
+  const btcSeriesRef = useRef<ISeriesApi<'Candlestick'> | null>(null);
   const [loading, setLoading] = useState(false);
+  const [btcLoading, setBtcLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [chartData, setChartData] = useState<CombinedCandleData[]>([]);
+  const [btcData, setBtcData] = useState<CandlestickData[]>([]);
   const [currentCalculation, setCurrentCalculation] = useState<CalculationMethod>(calculationMethod);
+  const [resolution, setResolution] = useState('5');
+  const [btcPrice, setBtcPrice] = useState<number>(0);
+  const [btcPriceChange, setBtcPriceChange] = useState<number>(0);
 
-  const { connected, subscribeCandlesticks, onMessage, offMessage } = useDeltaWebSocket();
+  const { connected, subscribeCandlesticks, subscribeMarkPrices, onMessage, offMessage } = useDeltaWebSocket();
 
   const resolveTheme = () => {
     const isDark = document.documentElement.classList.contains('dark');
@@ -71,14 +120,19 @@ export const CombinedChart: React.FC<CombinedChartProps> = ({
 
     const theme = resolveTheme();
 
-    // Initialize chart
+    // Initialize chart with multiple panes support
     const chart = createChart(container, {
       width: container.clientWidth,
-      height: 400,
+      height: 1500, // Increased height to accommodate two panes
       layout: {
         background: { type: ColorType.Solid, color: theme.background },
         textColor: theme.text,
         attributionLogo: false,
+        panes: {
+          separatorColor: theme.paneSeparator,
+          separatorHoverColor: theme.paneSeparator,
+          enableResize: true,
+        },
       },
       grid: {
         vertLines: { color: theme.grid },
@@ -97,18 +151,43 @@ export const CombinedChart: React.FC<CombinedChartProps> = ({
       },
     });
 
-    // Add candlestick series
-    const series = chart.addSeries(CandlestickSeries, {
+    // Add combined options candlestick series (pane 0 - top)
+    const optionsSeries = chart.addSeries(CandlestickSeries, {
       upColor: '#10b981',
       downColor: '#ef4444',
       borderUpColor: '#10b981',
       borderDownColor: '#ef4444',
       wickUpColor: '#10b981',
       wickDownColor: '#ef4444',
-    });
+    }, 0); // Pane index 0
+
+    // Add BTC candlestick series (pane 1 - bottom)  
+    const btcSeries = chart.addSeries(CandlestickSeries, {
+      upColor: '#3b82f6',
+      downColor: '#ef4444',
+      borderUpColor: '#3b82f6',
+      borderDownColor: '#ef4444',
+      wickUpColor: '#3b82f6',
+      wickDownColor: '#ef4444',
+    }, 1); // Pane index 1
 
     chartRef.current = chart;
-    seriesRef.current = series;
+    optionsSeriesRef.current = optionsSeries;
+    btcSeriesRef.current = btcSeries;
+
+    // Set pane heights - top pane (options) gets more space
+    setTimeout(() => {
+      const panes = chart.panes();
+      if (panes.length >= 2) {
+        panes[0].setHeight(600); // Top pane for combined options
+        panes[1].setHeight(600); // Bottom pane for BTC
+        chart.timeScale().fitContent();
+        // Auto-scale price scales initially
+        panes.forEach(pane => {
+          pane.priceScale('right').applyOptions({ autoScale: true });
+        });
+      }
+    }, 100);
 
     // Handle resize
     const resizeObserver = new ResizeObserver((entries) => {
@@ -134,6 +213,10 @@ export const CombinedChart: React.FC<CombinedChartProps> = ({
         layout: {
           background: { type: ColorType.Solid, color: nextTheme.background },
           textColor: nextTheme.text,
+          panes: {
+            separatorColor: nextTheme.paneSeparator,
+            separatorHoverColor: nextTheme.paneSeparator,
+          },
         },
         grid: {
           vertLines: { color: nextTheme.grid },
@@ -161,7 +244,7 @@ export const CombinedChart: React.FC<CombinedChartProps> = ({
   }, []);
 
   useEffect(() => {
-    if (!seriesRef.current) return;
+    if (!optionsSeriesRef.current) return;
 
     if (chartData.length > 0) {
       console.log(`[CombinedChart] Setting ${chartData.length} data points to chart`);
@@ -177,85 +260,204 @@ export const CombinedChart: React.FC<CombinedChartProps> = ({
       console.log(`[CombinedChart] First candle:`, formattedData[0]);
       console.log(`[CombinedChart] Last candle:`, formattedData[formattedData.length - 1]);
 
-      seriesRef.current.setData(formattedData);
+      optionsSeriesRef.current.setData(formattedData);
       
-      // Force chart to fit content
+      // Force chart to fit content and auto-scale price scales
       setTimeout(() => {
         if (chartRef.current) {
           chartRef.current.timeScale().fitContent();
+          // Auto-scale both price scales to fit the data
+          const panes = chartRef.current.panes();
+          panes.forEach(pane => {
+            pane.priceScale('right').applyOptions({ autoScale: true });
+          });
         }
       }, 100);
     } else {
       console.log('[CombinedChart] No data to display');
-      seriesRef.current.setData([]);
+      optionsSeriesRef.current.setData([]);
     }
   }, [chartData]);
 
   useEffect(() => {
-    const loadChartData = async () => {
-      if (selections.length === 0) {
-        setChartData([]);
-        return;
-      }
+    if (!btcSeriesRef.current) return;
 
+    if (btcData.length > 0) {
+      const formattedData = btcData.map(candle => ({
+        time: candle.time as UTCTimestamp,
+        open: candle.open,
+        high: candle.high,
+        low: candle.low,
+        close: candle.close,
+      }));
+
+      btcSeriesRef.current.setData(formattedData);
+      
+      // Auto-scale price scales when BTC data is loaded
+      setTimeout(() => {
+        if (chartRef.current) {
+          const panes = chartRef.current.panes();
+          panes.forEach(pane => {
+            pane.priceScale('right').applyOptions({ autoScale: true });
+          });
+        }
+      }, 100);
+    } else {
+      btcSeriesRef.current.setData([]);
+    }
+  }, [btcData]);
+
+  useEffect(() => {
+    const loadChartData = async () => {
       setLoading(true);
+      setBtcLoading(true);
       setError(null);
 
       try {
         console.log(`[CombinedChart] Fetching data with resolution: "${resolution}"`);
         
+        // If no selections, clear data
+        if (selections.length === 0) {
+          setChartData([]);
+          setBtcData([]);
+          return;
+        }
+
         // Separate calls and puts
         const calls = selections.filter(s => s.type === 'call');
         const puts = selections.filter(s => s.type === 'put');
 
-        if (calls.length === 0 || puts.length === 0) {
-          setError('Select at least one call and one put option');
-          setChartData([]);
-          return;
+        console.log(`[CombinedChart] ${calls.length} calls, ${puts.length} puts selected`);
+
+        // Fetch all option data in parallel for better performance
+        const allOptionSymbols = [...calls.map(c => c.symbol), ...puts.map(p => p.symbol)];
+        const allOptionData: CandlestickData[][] = [];
+        
+        if (allOptionSymbols.length > 0) {
+          // Use cache for better performance
+          const cache = chartDataCache;
+          
+          const dataPromises = allOptionSymbols.map(async (symbol, index) => {
+            const cacheKey = `${symbol}_${resolution}`;
+            const cachedData = cache.get(cacheKey);
+            
+            if (cachedData) {
+              console.log(`[CombinedChart] Using cached data for ${symbol}`);
+              return cachedData;
+            }
+            
+            const data = await fetchCandlestickData(symbol, resolution);
+            cache.set(cacheKey, data);
+            return data;
+          });
+          
+          const fetchedData = await Promise.all(dataPromises);
+          allOptionData.push(...fetchedData);
+        }
+        
+        // Separate call and put data
+        const callData = allOptionData.slice(0, calls.length);
+        const putData = allOptionData.slice(calls.length);
+
+        console.log(`[CombinedChart] Call data lengths:`, callData.map(d => d.length));
+        console.log(`[CombinedChart] Put data lengths:`, putData.map(d => d.length));
+
+        // Combine data using the improved helper function
+        let combinedOptionsData: CombinedCandleData[] = [];
+        
+        if (callData.length > 0 || putData.length > 0) {
+          // Use the improved combination logic
+          combinedOptionsData = combineOptionData(
+            callData.flat(), 
+            putData.flat(), 
+            currentCalculation
+          );
+          
+          console.log(`[CombinedChart] Combined options data length: ${combinedOptionsData.length}`);
+          
+          if (combinedOptionsData.length === 0) {
+            setError('No valid candlestick data available for selected options');
+            setChartData([]);
+          } else {
+            setChartData(combinedOptionsData);
+          }
+          
+          // Subscribe to real-time updates for all options
+          subscribeCandlesticks(allOptionSymbols, resolution);
         }
 
-        // For now, use the first call and first put
-        // In a full implementation, you might want to handle multiple selections
-        const selectedCall = calls[0];
-        const selectedPut = puts[0];
+        // Fetch BTC data in parallel
+        console.log(`[CombinedChart] Fetching BTC data with resolution: "${resolution}"`);
+        const btcCandlestickData = await fetchCandlestickData('BTCUSD', resolution);
+        
+        if (btcCandlestickData.length === 0) {
+          console.warn('[CombinedChart] No BTC price data available');
+          setBtcData([]);
+        } else {
+          // Synchronize BTC data with options timeframe using improved logic
+          let synchronizedBtcData = btcCandlestickData;
+          
+          if (combinedOptionsData.length > 0) {
+            synchronizedBtcData = await synchronizeDataWithOptions(
+              btcCandlestickData,
+              combinedOptionsData,
+              resolution
+            );
+          }
+          
+          console.log(`[CombinedChart] Synchronized BTC data length: ${synchronizedBtcData.length}`);
+          setBtcData(synchronizedBtcData);
+          
+          // Calculate BTC metrics
+          if (synchronizedBtcData.length > 0) {
+            // Calculate BTC price change
+            if (synchronizedBtcData.length >= 2) {
+              const latest = synchronizedBtcData[synchronizedBtcData.length - 1].close;
+              const previous = synchronizedBtcData[synchronizedBtcData.length - 2].close;
+              const change = ((latest - previous) / previous) * 100;
+              setBtcPriceChange(change);
+            }
 
-        console.log(`[CombinedChart] Fetching call: ${selectedCall.symbol}, put: ${selectedPut.symbol}`);
+            // Get current BTC price
+            try {
+              const currentBtcPrice = await fetchBTCPrice();
+              setBtcPrice(currentBtcPrice);
+            } catch (err) {
+              console.warn('[CombinedChart] Failed to fetch current BTC price:', err);
+              // Use last close price as fallback
+              if (synchronizedBtcData.length > 0) {
+                setBtcPrice(synchronizedBtcData[synchronizedBtcData.length - 1].close);
+              }
+            }
 
-        // Fetch data for both options
-        const [callData, putData] = await Promise.all([
-          fetchCandlestickData(selectedCall.symbol, resolution),
-          fetchCandlestickData(selectedPut.symbol, resolution)
-        ]);
-
-        if (callData.length === 0 || putData.length === 0) {
-          setError('No candlestick data available for selected options');
-          setChartData([]);
-          return;
+            // Subscribe to real-time updates for BTC
+            subscribeMarkPrices(['BTCUSD']);
+          }
         }
 
-        // Combine the data
-        const combined = combineOptionData(callData, putData, currentCalculation);
-        setChartData(combined);
-
-        // Subscribe to real-time updates
-        subscribeCandlesticks([selectedCall.symbol, selectedPut.symbol], resolution);
+        // Reset and scale chart after all data is loaded
+        setTimeout(() => {
+          resetAndScaleChart();
+        }, 200);
 
       } catch (err) {
         console.error('Error loading chart data:', err);
         setError(`Failed to load chart data: ${err instanceof Error ? err.message : 'Unknown error'}`);
         setChartData([]);
+        setBtcData([]);
       } finally {
         setLoading(false);
+        setBtcLoading(false);
       }
     };
 
     loadChartData();
-  }, [selections, currentCalculation, resolution, subscribeCandlesticks]);
+  }, [selections, currentCalculation, resolution, subscribeCandlesticks, subscribeMarkPrices]);
 
-  // Handle real-time updates
+  // Handle real-time updates for options
   useEffect(() => {
     const handleCandlestickUpdate = (data: unknown) => {
-      if (!seriesRef.current) return;
+      if (!optionsSeriesRef.current) return;
 
       const update = data as CandlestickUpdate;
       // Update the latest candle or add new one
@@ -267,9 +469,7 @@ export const CombinedChart: React.FC<CombinedChartProps> = ({
         close: update.close,
       };
 
-      // Simple update approach - always update with the new candle
-      // In a more sophisticated implementation, you'd want to check if it's updating an existing candle
-      seriesRef.current.update(candle);
+      optionsSeriesRef.current.update(candle);
     };
 
     if (connected) {
@@ -281,9 +481,52 @@ export const CombinedChart: React.FC<CombinedChartProps> = ({
     }
   }, [connected, onMessage, offMessage]);
 
+  // Handle real-time price updates for BTC
+  useEffect(() => {
+    const handlePriceUpdate = (update: PriceUpdate) => {
+      if (!update || !update.symbol || update.symbol !== 'BTCUSD') return;
+
+      setBtcPrice(update.price);
+      
+      // Calculate change from last known price
+      if (btcData.length > 0) {
+        const lastPrice = btcData[btcData.length - 1].close;
+        const change = ((update.price - lastPrice) / lastPrice) * 100;
+        setBtcPriceChange(change);
+      }
+    };
+
+    if (connected) {
+      onMessage('price', (data: unknown) => {
+        const priceUpdate = data as PriceUpdate;
+        handlePriceUpdate(priceUpdate);
+      });
+
+      return () => {
+        offMessage('price', (data: unknown) => {
+          const priceUpdate = data as PriceUpdate;
+          handlePriceUpdate(priceUpdate);
+        });
+      };
+    }
+  }, [connected, onMessage, offMessage, btcData]);
+
   const handleCalculationMethodChange = (method: CalculationMethod) => {
     setCurrentCalculation(method);
     onCalculationChange(method);
+  };
+
+  const resetAndScaleChart = () => {
+    if (chartRef.current) {
+      console.log('[CombinedChart] Resetting and scaling chart');
+      chartRef.current.timeScale().fitContent();
+      
+      // Auto-scale both price scales
+      const panes = chartRef.current.panes();
+      panes.forEach(pane => {
+        pane.priceScale('right').applyOptions({ autoScale: true });
+      });
+    }
   };
 
   const getChartTitle = () => {
@@ -292,16 +535,52 @@ export const CombinedChart: React.FC<CombinedChartProps> = ({
     const calls = selections.filter(s => s.type === 'call');
     const puts = selections.filter(s => s.type === 'put');
     
-    if (calls.length === 0 && puts.length === 0) return 'Select options for straddle/strangle analysis';
+    if (calls.length === 0 && puts.length === 0) return 'Select options for analysis';
     
-    if (calls.length === 0) return `${puts.length} put(s) selected - need call option(s)`;
-    if (puts.length === 0) return `${calls.length} call(s) selected - need put option(s)`;
+    // Handle single option type selections
+    if (calls.length > 0 && puts.length === 0) {
+      if (calls.length === 1) {
+        return `Call Option: ${calls[0].symbol}`;
+      }
+      return `Combined Calls: ${calls.length} call options`;
+    }
     
+    if (calls.length === 0 && puts.length > 0) {
+      if (puts.length === 1) {
+        return `Put Option: ${puts[0].symbol}`;
+      }
+      return `Combined Puts: ${puts.length} put options`;
+    }
+    
+    // Both calls and puts selected
     if (calls.length === 1 && puts.length === 1) {
       return `Straddle: ${calls[0].symbol} + ${puts[0].symbol}`;
     }
     
-    return `Combined Options: ${calls.length} calls + ${puts.length} puts`;
+    return `Straddle/Strangle: ${calls.length} calls + ${puts.length} puts`;
+  };
+
+  const getBtcPriceChangeColor = () => {
+    if (btcPriceChange > 0) return 'text-green-600';
+    if (btcPriceChange < 0) return 'text-red-600';
+    return 'text-gray-600';
+  };
+
+  const getBtcPriceChangeIcon = () => {
+    if (btcPriceChange > 0) {
+      return (
+        <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
+          <path fillRule="evenodd" d="M5.293 9.707a1 1 0 010-1.414l4-4a1 1 0 011.414 0l4 4a1 1 0 01-1.414 1.414L10 6.414 6.707 9.707a1 1 0 01-1.414 0z" clipRule="evenodd" />
+        </svg>
+      );
+    } else if (btcPriceChange < 0) {
+      return (
+        <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
+          <path fillRule="evenodd" d="M14.707 10.293a1 1 0 010 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 111.414-1.414L10 13.586l3.293-3.293a1 1 0 011.414 0z" clipRule="evenodd" />
+        </svg>
+      );
+    }
+    return null;
   };
 
   return (
@@ -310,38 +589,72 @@ export const CombinedChart: React.FC<CombinedChartProps> = ({
       <div className="p-4 border-b border-gray-200">
         <div className="flex items-center justify-between">
           <div>
-            <h2 className="text-lg font-semibold text-gray-900">Combined Options Chart</h2>
-            <p className="text-sm text-gray-600 mt-1">{getChartTitle()}</p>
+            <h2 className="text-lg font-semibold text-gray-900">Combined Options + BTC Chart</h2>
+            <div className="flex items-center space-x-4 mt-1">
+              <p className="text-sm text-gray-600">{getChartTitle()}</p>
+              {btcPrice > 0 && (
+                <div className="flex items-center space-x-2">
+                  <span className="text-lg font-bold text-gray-900">
+                    ${btcPrice.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                  </span>
+                  {Math.abs(btcPriceChange) > 0.01 && (
+                    <span className={`text-sm font-medium flex items-center ${getBtcPriceChangeColor()}`}>
+                      {getBtcPriceChangeIcon()}
+                      {btcPriceChange.toFixed(2)}%
+                    </span>
+                  )}
+                </div>
+              )}
+            </div>
           </div>
           
-          {/* Calculation Method Toggle */}
-          <div className="flex items-center space-x-2">
-            <span className="text-sm text-gray-600">Calculation:</span>
-            <div className="flex bg-gray-100 rounded-lg p-1">
-              <button
-                onClick={() => handleCalculationMethodChange('average')}
-                className={`
-                  px-3 py-1 text-sm rounded-md transition-all duration-200
-                  ${currentCalculation === 'average'
-                    ? 'bg-white text-blue-600 shadow-sm'
-                    : 'text-gray-600 hover:text-gray-800'
-                  }
-                `}
+          {/* Controls */}
+          <div className="flex items-center space-x-4">
+            {/* Resolution Selector */}
+            <div className="flex items-center space-x-2">
+              <span className="text-sm text-gray-600">Resolution:</span>
+              <select
+                value={resolution}
+                onChange={(e) => setResolution(e.target.value)}
+                className="text-sm text-gray-900 border border-gray-300 rounded-lg px-3 py-1 bg-white hover:border-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
               >
-                Average
-              </button>
-              <button
-                onClick={() => handleCalculationMethodChange('sum')}
-                className={`
-                  px-3 py-1 text-sm rounded-md transition-all duration-200
-                  ${currentCalculation === 'sum'
-                    ? 'bg-white text-blue-600 shadow-sm'
-                    : 'text-gray-600 hover:text-gray-800'
-                  }
-                `}
-              >
-                Sum
-              </button>
+                <option value="1">1m</option>
+                <option value="3">3m</option>
+                <option value="5">5m</option>
+                <option value="15">15m</option>
+                <option value="30">30m</option>
+              </select>
+            </div>
+
+            {/* Calculation Method Toggle */}
+            <div className="flex items-center space-x-2">
+              <span className="text-sm text-gray-600">Calculation:</span>
+              <div className="flex bg-gray-100 rounded-lg p-1">
+                <button
+                  onClick={() => handleCalculationMethodChange('average')}
+                  className={`
+                    px-3 py-1 text-sm rounded-md transition-all duration-200
+                    ${currentCalculation === 'average'
+                      ? 'bg-white text-blue-600 shadow-sm'
+                      : 'text-gray-600 hover:text-gray-800'
+                    }
+                  `}
+                >
+                  Average
+                </button>
+                <button
+                  onClick={() => handleCalculationMethodChange('sum')}
+                  className={`
+                    px-3 py-1 text-sm rounded-md transition-all duration-200
+                    ${currentCalculation === 'sum'
+                      ? 'bg-white text-blue-600 shadow-sm'
+                      : 'text-gray-600 hover:text-gray-800'
+                    }
+                  `}
+                >
+                  Sum
+                </button>
+              </div>
             </div>
           </div>
         </div>
@@ -355,7 +668,7 @@ export const CombinedChart: React.FC<CombinedChartProps> = ({
             </span>
           </div>
           
-          {loading && (
+          {(loading || btcLoading) && (
             <div className="flex items-center">
               <div className="animate-spin rounded-full h-3 w-3 border-b border-blue-600 mr-2"></div>
               <span className="text-xs text-gray-600">Loading data...</span>
@@ -364,7 +677,13 @@ export const CombinedChart: React.FC<CombinedChartProps> = ({
           
           {chartData.length > 0 && (
             <div className="text-xs text-gray-600">
-              {chartData.length} candles • Resolution: {resolution}
+              {chartData.length} options candles • Resolution: {resolution}
+            </div>
+          )}
+          
+          {btcData.length > 0 && (
+            <div className="text-xs text-gray-600">
+              {btcData.length} BTC candles
             </div>
           )}
         </div>
@@ -385,7 +704,7 @@ export const CombinedChart: React.FC<CombinedChartProps> = ({
         ) : (
           <div
             ref={chartContainerRef}
-            className="w-full h-96 rounded-lg border border-gray-200"
+            className="w-full h-[700px] rounded-lg border border-gray-200"
           />
         )}
       </div>
@@ -399,17 +718,17 @@ export const CombinedChart: React.FC<CombinedChartProps> = ({
               <span className="ml-1 font-medium capitalize">{currentCalculation}</span>
             </div>
             <div>
-              <span className="text-gray-600">Data Points:</span>
+              <span className="text-gray-600">Options Data Points:</span>
               <span className="ml-1 font-medium">{chartData.length}</span>
             </div>
             <div>
-              <span className="text-gray-600">Latest Price:</span>
+              <span className="text-gray-600">Latest Options Price:</span>
               <span className="ml-1 font-medium">
                 {chartData.length > 0 ? chartData[chartData.length - 1].close.toFixed(4) : '-'}
               </span>
             </div>
             <div>
-              <span className="text-gray-600">Price Change:</span>
+              <span className="text-gray-600">Options Price Change:</span>
               <span className={`ml-1 font-medium ${
                 chartData.length >= 2 
                   ? chartData[chartData.length - 1].close > chartData[chartData.length - 2].close 
@@ -424,6 +743,32 @@ export const CombinedChart: React.FC<CombinedChartProps> = ({
               </span>
             </div>
           </div>
+          
+          {/* BTC Info */}
+          {btcData.length > 0 && (
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm mt-4 pt-4 border-t border-gray-200">
+              <div>
+                <span className="text-gray-600">BTC Symbol:</span>
+                <span className="ml-1 font-medium text-gray-900">BTCUSD</span>
+              </div>
+              <div>
+                <span className="text-gray-600">BTC Data Points:</span>
+                <span className="ml-1 font-medium">{btcData.length}</span>
+              </div>
+              <div>
+                <span className="text-gray-600">BTC Current Price:</span>
+                <span className="ml-1 font-medium">
+                  ${btcPrice.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                </span>
+              </div>
+              <div>
+                <span className="text-gray-600">BTC 24h Change:</span>
+                <span className={`ml-1 font-medium ${getBtcPriceChangeColor()}`}>
+                  {Math.abs(btcPriceChange) > 0.01 ? `${btcPriceChange.toFixed(2)}%` : '-'}
+                </span>
+              </div>
+            </div>
+          )}
         </div>
       )}
     </div>

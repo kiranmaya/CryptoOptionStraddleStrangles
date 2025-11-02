@@ -14,8 +14,7 @@ export default function DeltaStraddleDashboard() {
   // State management
   const [selectedDate, setSelectedDate] = useState<string>('');
   const [selections, setSelections] = useState<Selection[]>([]);
-  const [calculationMethod, setCalculationMethod] = useState<CalculationMethod>('average');
-  const [resolution, setResolution] = useState('1');
+  const [calculationMethod, setCalculationMethod] = useState<CalculationMethod>('sum');
   const [isFullscreen, setIsFullscreen] = useState(true);
 
   // Handle date selection
@@ -33,11 +32,6 @@ export default function DeltaStraddleDashboard() {
   // Handle calculation method changes
   const handleCalculationMethodChange = (method: CalculationMethod) => {
     setCalculationMethod(method);
-  };
-
-  // Handle resolution changes
-  const handleResolutionChange = (newResolution: string) => {
-    setResolution(newResolution);
   };
 
   // Export chart as PNG (bonus feature)
@@ -126,43 +120,14 @@ export default function DeltaStraddleDashboard() {
           {/* Right Column - Charts */}
           <div className={`${isFullscreen ? 'xl:col-span-2' : 'lg:col-span-1'} space-y-6`}>
             {/* Combined Options Chart */}
-            <ChartSection
-              title="Combined Options Chart"
-              description="Straddle/strangle visualization with real-time data"
-              headerAction={
-                <div className="flex items-center space-x-2">
-                  <select
-                    value={resolution}
-                    onChange={(e) => handleResolutionChange(e.target.value)}
-                    className="text-sm border border-gray-300 rounded-lg px-3 py-1 bg-white"
-                  >
-                    <option value="1">1m</option>
-                    <option value="3">3m</option>
-                    <option value="5">5m</option>
-                    <option value="15">15m</option>
-                    <option value="30">30m</option>
-                  </select>
-                </div>
-              }
-            >
-              <CombinedChart
-                selections={selections}
-                calculationMethod={calculationMethod}
-                resolution={resolution}
-                onCalculationChange={handleCalculationMethodChange}
-              />
-            </ChartSection>
+            <CombinedChart
+              selections={selections}
+              calculationMethod={calculationMethod}
+              onCalculationChange={handleCalculationMethodChange}
+            />
 
             {/* BTC Price Chart */}
-            <ChartSection
-              title="Bitcoin Price Chart"
-              description="Underlying asset price tracking"
-            >
-              <BtcChart
-                resolution={resolution}
-                onResolutionChange={handleResolutionChange}
-              />
-            </ChartSection>
+            <BtcChart />
           </div>
         </div>
 
@@ -217,7 +182,6 @@ export default function DeltaStraddleDashboard() {
                   <div className="text-sm text-gray-600">
                     <span>Calculation Method: </span>
                     <span className="font-medium capitalize">{calculationMethod}</span>
-                    <span className="ml-4">Resolution: {resolution}m</span>
                   </div>
                   <button
                     onClick={() => setSelections([])}

@@ -14,8 +14,8 @@ import { fetchBTCPrice, fetchCandlestickData } from '../utils/deltaApi';
 import { useDeltaWebSocket } from '../utils/websocketClient';
 
 interface BtcChartProps {
-  resolution: string;
-  onResolutionChange: (resolution: string) => void;
+  // Optional props - if not provided, uses default values
+  initialResolution?: string;
 }
 
 interface PriceUpdate {
@@ -25,8 +25,7 @@ interface PriceUpdate {
 }
 
 export const BtcChart: React.FC<BtcChartProps> = ({
-  resolution,
-  onResolutionChange
+  initialResolution = '1'
 }) => {
   const chartContainerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
@@ -34,6 +33,7 @@ export const BtcChart: React.FC<BtcChartProps> = ({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [chartData, setChartData] = useState<Array<{time: number, open: number, high: number, low: number, close: number}>>([]);
+  const [resolution, setResolution] = useState(initialResolution);
   const [currentPrice, setCurrentPrice] = useState<number>(0);
   const [priceChange, setPriceChange] = useState<number>(0);
 
@@ -253,7 +253,7 @@ export const BtcChart: React.FC<BtcChartProps> = ({
   }, [connected, onMessage, offMessage, chartData]);
 
   const handleResolutionChange = (newResolution: string) => {
-    onResolutionChange(newResolution);
+    setResolution(newResolution);
   };
 
   const getPriceChangeColor = () => {
