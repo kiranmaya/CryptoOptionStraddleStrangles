@@ -10,6 +10,11 @@ A real-time financial dashboard for analyzing Bitcoin options trading strategies
 
 **[View Live Dashboard →](https://crypto-option-straddle-strangles.vercel.app/)**
 
+## 📸 Dashboard Screenshot
+
+![Crypto Options Dashboard](public/Images/Screenshot_103.jpg)
+*Real-time Bitcoin options straddle and strangle analysis dashboard*
+
 ## 📊 Features
 
 ### Core Trading Features
