@@ -142,8 +142,38 @@ export const CombinedChart: React.FC<CombinedChartProps> = ({
   const [resolution, setResolution] = useState('5');
   const [btcPrice, setBtcPrice] = useState<number>(0);
   const [btcPriceChange, setBtcPriceChange] = useState<number>(0);
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  const [containerElement, setContainerElement] = useState<HTMLDivElement | null>(null);
 
   const { connected, subscribeCandlesticks, subscribeMarkPrices, onMessage, offMessage } = useDeltaWebSocket();
+
+  // Fullscreen handlers
+  const toggleFullscreen = () => {
+    setIsFullscreen(!isFullscreen);
+  };
+
+  const exitFullscreen = () => {
+    setIsFullscreen(false);
+  };
+
+  // Handle ESC key to exit fullscreen
+  useEffect(() => {
+    const handleEscKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape' && isFullscreen) {
+        exitFullscreen();
+      }
+    };
+
+    if (isFullscreen) {
+      document.addEventListener('keydown', handleEscKey);
+      document.body.style.overflow = 'hidden'; // Prevent background scrolling
+    }
+
+    return () => {
+      document.removeEventListener('keydown', handleEscKey);
+      document.body.style.overflow = 'unset';
+    };
+  }, [isFullscreen]);
 
   const resolveTheme = () => {
     const isDark = document.documentElement.classList.contains('dark');
@@ -153,6 +183,23 @@ export const CombinedChart: React.FC<CombinedChartProps> = ({
       grid: isDark ? 'rgba(148,163,184,0.12)' : 'rgba(148,163,184,0.2)',
       paneSeparator: isDark ? 'rgba(148,163,184,0.28)' : 'rgba(148,163,184,0.35)',
     };
+  };
+
+  // Price formatter function using Intl.NumberFormat
+  const createPriceFormatter = () => {
+    // Get the current user's primary locale
+    const currentLocale = window.navigator.languages[0] || 'en-US';
+    // Create a number format using Intl.NumberFormat
+    return Intl.NumberFormat(currentLocale, {
+      style: 'currency',
+      currency: 'USD', // Currency for data points
+    }).format;
+  };
+
+  // Helper function to get pane title for debugging
+  const getPaneTitle = (index: number): string => {
+    const titles = ['Combined Options', 'CCI1 (Combined)', 'BTC Price', 'CCI2 (BTC)'];
+    return titles[index] || `Pane ${index}`;
   };
 
   useEffect(() => {
@@ -167,11 +214,12 @@ export const CombinedChart: React.FC<CombinedChartProps> = ({
     }
 
     const theme = resolveTheme();
+   
 
     // Initialize chart with multiple panes support (4 panes in new order)
     const chart = createChart(container, {
       width: container.clientWidth,
-      height: 1000, // Increased height for 4 panes
+      height: container.clientHeight || 1000, // Use container height or fallback to 1000
       layout: {
         background: { type: ColorType.Solid, color: theme.background },
         textColor: theme.text,
@@ -188,6 +236,17 @@ export const CombinedChart: React.FC<CombinedChartProps> = ({
       },
       crosshair: {
         mode: CrosshairMode.Normal,
+        // Vertical crosshair line (showing Date in Label)
+        vertLine: {
+         
+          color: '#C3BCDB44',
+          labelBackgroundColor: '#9B7DFF',
+        },
+        // Horizontal crosshair line (showing Price in Label)
+        horzLine: {
+          color: '#9B7DFF',
+          labelBackgroundColor: '#9B7DFF',
+        },
       },
       rightPriceScale: {
         borderColor: theme.paneSeparator,
@@ -243,29 +302,78 @@ export const CombinedChart: React.FC<CombinedChartProps> = ({
     btcSeriesRef.current = btcSeries;
     btcCciSeriesRef.current = btcCciSeries;
 
-    // Set pane heights for 4 panes in new order
+    // Set pane heights for 4 panes using stretch factors (following lightweight-charts example)
     const initializePanes = () => {
       const panes = chart.panes();
       console.log(`[CombinedChart] Found ${panes.length} panes`);
       
       if (panes.length >= 4) {
-        // Set heights for 4 panes in new order
-        const paneHeights = [250, 250, 250, 250]; // Options, CCI1, BTC, CCI2
-        panes.forEach((pane, index) => {
-          if (paneHeights[index]) {
-            pane.setHeight(paneHeights[index]);
-            console.log(`[CombinedChart] Set pane ${index} height: ${paneHeights[index]}px`);
-          }
-        });
+        // Use stretch factors to set proportional heights
+        // Each factor is treated as percentage when summed (total = 100)
+        // Equal distribution: 25% each for 4 panes
+        panes[0].setStretchFactor(25); // Combined Options
+        panes[1].setStretchFactor(25); // CCI1 (Combined)
+        panes[2].setStretchFactor(25); // BTC Price
+        panes[3].setStretchFactor(25); // CCI2 (BTC)
+        
+        console.log(`[CombinedChart] Set stretch factors: Pane 0 (25%), Pane 1 (25%), Pane 2 (25%), Pane 3 (25%)`);
         
         // Fit content and auto-scale price scales
         chart.timeScale().fitContent();
         
         // Auto-scale all price scales
         panes.forEach((pane, index) => {
-          console.log(`[CombinedChart] Auto-scaling pane ${index}`);
+          console.log(`[CombinedChart] Auto-scaling pane ${index} (${getPaneTitle(index)})`);
           pane.priceScale('right').applyOptions({ autoScale: true });
         });
+        
+        // Create fixed CCI reference lines (+100 and -100) for both CCI panes
+        // These are created only once and remain fixed throughout chart lifetime
+        if (optionsCciSeriesRef.current && !optionsCciPriceLinesRef.current.length) {
+          const plus100Line = optionsCciSeriesRef.current.createPriceLine({
+            price: 100,
+            color: '#ef4444',
+            lineWidth: 3,
+            lineStyle: 3, // Dashed line
+            axisLabelVisible: true,
+            title: 'CCI1 +100',
+          });
+          
+          const minus100Line = optionsCciSeriesRef.current.createPriceLine({
+            price: -100,
+            color: '#10b981',
+            lineWidth: 3,
+            lineStyle: 3, // Dashed line
+            axisLabelVisible: true,
+            title: 'CCI1 -100',
+          });
+          
+          optionsCciPriceLinesRef.current = [plus100Line, minus100Line];
+          console.log('[CombinedChart] CCI1 reference lines created permanently');
+        }
+        
+        if (btcCciSeriesRef.current && !btcCciPriceLinesRef.current.length) {
+          const plus100Line1 = btcCciSeriesRef.current.createPriceLine({
+            price: 100,
+            color: '#ef4444',
+            lineWidth: 3,
+            lineStyle: 3, // Dashed line
+            axisLabelVisible: true,
+            title: 'CCI2 +100',
+          });
+          
+          const minus100Line1 = btcCciSeriesRef.current.createPriceLine({
+            price: -100,
+            color: '#10b981',
+            lineWidth: 3,
+            lineStyle: 3, // Dashed line
+            axisLabelVisible: true,
+            title: 'CCI2 -100',
+          });
+          
+          btcCciPriceLinesRef.current = [plus100Line1, minus100Line1];
+          console.log('[CombinedChart] CCI2 reference lines created permanently');
+        }
         
         return true;
       } else {
@@ -294,23 +402,27 @@ export const CombinedChart: React.FC<CombinedChartProps> = ({
         if (entry.target === container) {
           const { width, height } = entry.contentRect;
           if (width > 0 && height > 0) {
+            console.log(`[CombinedChart] Resizing chart to ${width}x${height}`);
             chart.applyOptions({
               width: Math.floor(width),
               height: Math.floor(height),
             });
             
-            // Re-initialize panes after resize to maintain proper heights
+            // Re-initialize panes after resize to maintain equal heights using stretch factors
             setTimeout(() => {
               const panes = chart.panes();
               if (panes.length >= 4) {
-                const paneHeights = [280, 220, 250, 250];
-                panes.forEach((pane, index) => {
-                  if (paneHeights[index]) {
-                    pane.setHeight(paneHeights[index]);
-                  }
-                });
+                // Reset stretch factors to maintain proportional layout
+                panes[0].setStretchFactor(25); // Combined Options
+                panes[1].setStretchFactor(25); // CCI1 (Combined)
+                panes[2].setStretchFactor(25); // BTC Price
+                panes[3].setStretchFactor(25); // CCI2 (BTC)
+                
+                console.log(`[CombinedChart] Resize - Reset stretch factors to maintain equal proportions`);
+                
                 chart.timeScale().fitContent();
-                panes.forEach(pane => {
+                panes.forEach((pane, index) => {
+                  console.log(`[CombinedChart] Resize auto-scale pane ${index} (${getPaneTitle(index)})`);
                   pane.priceScale('right').applyOptions({ autoScale: true });
                 });
               }
@@ -321,6 +433,52 @@ export const CombinedChart: React.FC<CombinedChartProps> = ({
     });
 
     resizeObserver.observe(container);
+
+    // Handle fullscreen resize specifically
+    const handleFullscreenResize = () => {
+      if (chartRef.current && container) {
+        const rect = container.getBoundingClientRect();
+        console.log(`[CombinedChart] Fullscreen resize detected: ${rect.width}x${rect.height}`);
+        
+        chartRef.current.applyOptions({
+          width: Math.floor(rect.width),
+          height: Math.floor(rect.height),
+        });
+        
+        // Re-apply stretch factors after fullscreen resize
+        setTimeout(() => {
+          const panes = chartRef.current!.panes();
+          if (panes.length >= 4) {
+            panes[0].setStretchFactor(25);
+            panes[1].setStretchFactor(25);
+            panes[2].setStretchFactor(25);
+            panes[3].setStretchFactor(25);
+            
+            chartRef.current!.timeScale().fitContent();
+            panes.forEach((pane, index) => {
+              pane.priceScale('right').applyOptions({ autoScale: true });
+            });
+          }
+        }, 150);
+      }
+    };
+
+    // Listen for fullscreen changes
+    const handleFullscreenChange = () => {
+      if (isFullscreen) {
+        // Small delay to allow DOM to settle
+        setTimeout(handleFullscreenResize, 100);
+      } else {
+        // Exit fullscreen
+        setTimeout(handleFullscreenResize, 100);
+      }
+    };
+
+    // Add fullscreen change listeners
+    document.addEventListener('fullscreenchange', handleFullscreenChange);
+    document.addEventListener('webkitfullscreenchange', handleFullscreenChange);
+    document.addEventListener('mozfullscreenchange', handleFullscreenChange);
+    document.addEventListener('MSFullscreenChange', handleFullscreenChange);
 
     // Handle theme changes
     const themeObserver = new MutationObserver(() => {
@@ -355,6 +513,10 @@ export const CombinedChart: React.FC<CombinedChartProps> = ({
     return () => {
       resizeObserver.disconnect();
       themeObserver.disconnect();
+      document.removeEventListener('fullscreenchange', handleFullscreenChange);
+      document.removeEventListener('webkitfullscreenchange', handleFullscreenChange);
+      document.removeEventListener('mozfullscreenchange', handleFullscreenChange);
+      document.removeEventListener('MSFullscreenChange', handleFullscreenChange);
       chart.remove();
     };
   }, []);
@@ -398,40 +560,8 @@ export const CombinedChart: React.FC<CombinedChartProps> = ({
           
           optionsCciSeriesRef.current.setData(cciFormattedData);
           
-          // Set reference line data for CCI1 pane (+100 and -100)
-          if (calculatedCCIi.length > 0 && optionsCciSeriesRef.current) {
-            // Clear existing price lines first to prevent duplication
-            optionsCciPriceLinesRef.current.forEach(line => {
-              if (line && typeof line === 'object' && 'remove' in line) {
-                (line as { remove: () => void }).remove();
-              }
-            });
-            optionsCciPriceLinesRef.current = [];
-            
-            // Create new price lines for CCI1 (+100 and -100) with unique titles
-            const plus100Line = optionsCciSeriesRef.current.createPriceLine({
-              price: 100,
-              color: '#ef4444',
-              lineWidth: 1,
-              lineStyle: 2, // Dashed line
-              axisLabelVisible: true,
-              title: 'CCI1 +100',
-            });
-            
-            const minus100Line = optionsCciSeriesRef.current.createPriceLine({
-              price: -100,
-              color: '#10b981',
-              lineWidth: 1,
-              lineStyle: 2, // Dashed line
-              axisLabelVisible: true,
-              title: 'CCI1 -100',
-            });
-            
-            // Store references to the price lines
-            optionsCciPriceLinesRef.current = [plus100Line, minus100Line];
-            
-            console.log(`[CombinedChart] CCI1 price lines created successfully`);
-          }
+          // CCI reference lines (+100 and -100) are already created permanently in initialization
+          // No need to recreate them here - they remain fixed throughout chart lifetime
           console.log(`[CombinedChart] Set ${calculatedCCIi.length} CCI1 data points`);
         }
         
@@ -485,40 +615,8 @@ export const CombinedChart: React.FC<CombinedChartProps> = ({
         btcCciSeriesRef.current.setData(btcCciFormattedData);
         console.log(`[CombinedChart] Set ${calculatedBtcCCI.length} CCI2 (BTC) data points`);
         
-        // Create price lines for CCI2 (+100 and -100)
-        if (calculatedBtcCCI.length > 0 && btcCciSeriesRef.current) {
-          // Clear existing price lines first to prevent duplication
-          btcCciPriceLinesRef.current.forEach(line => {
-            if (line && typeof line === 'object' && 'remove' in line) {
-              (line as { remove: () => void }).remove();
-            }
-          });
-          btcCciPriceLinesRef.current = [];
-          
-          // Create new price lines for CCI2 (+100 and -100) with unique titles
-          const plus100Line1 = btcCciSeriesRef.current.createPriceLine({
-            price: 100,
-            color: '#ef4444',
-            lineWidth: 1,
-            lineStyle: 2, // Dashed line
-            axisLabelVisible: true,
-            title: 'CCI2 +100',
-          });
-          
-          const minus100Line1 = btcCciSeriesRef.current.createPriceLine({
-            price: -100,
-            color: '#10b981',
-            lineWidth: 1,
-            lineStyle: 2, // Dashed line
-            axisLabelVisible: true,
-            title: 'CCI2 -100',
-          });
-          
-          // Store references to the price lines
-          btcCciPriceLinesRef.current = [plus100Line1, minus100Line1];
-          
-          console.log(`[CombinedChart] CCI2 price lines created successfully`);
-        }
+        // CCI reference lines (+100 and -100) are already created permanently in initialization
+        // No need to recreate them here - they remain fixed throughout chart lifetime
       }
       
       // Auto-scale price scales when BTC data is loaded
@@ -818,17 +916,24 @@ export const CombinedChart: React.FC<CombinedChartProps> = ({
   };
 
   return (
-    <div className="bg-white rounded-lg shadow-sm border">
+    <div className={`
+      ${isFullscreen
+        ? 'fixed inset-0 z-50 bg-white flex flex-col'
+        : 'bg-white rounded-lg shadow-sm border'
+      }
+    `}>
       {/* Chart Header */}
-      <div className="p-4 border-b border-gray-200">
+      <div className={`${isFullscreen ? 'p-6 border-b border-gray-200' : 'p-4 border-b border-gray-200'}`}>
         <div className="flex items-center justify-between">
           <div>
-            <h2 className="text-lg font-semibold text-gray-900">Combined Options + BTC Chart with Dual CCI</h2>
+            <h2 className={`${isFullscreen ? 'text-xl font-semibold' : 'text-lg font-semibold'} text-gray-900`}>
+              Combined Options + BTC Chart with Dual CCI
+            </h2>
             <div className="flex items-center space-x-4 mt-1">
               <p className="text-sm text-gray-600">{getChartTitle()}</p>
               {btcPrice > 0 && (
                 <div className="flex items-center space-x-2">
-                  <span className="text-lg font-bold text-gray-900">
+                  <span className={`${isFullscreen ? 'text-xl' : 'text-lg'} font-bold text-gray-900`}>
                     ${btcPrice.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                   </span>
                   {Math.abs(btcPriceChange) > 0.01 && (
@@ -844,22 +949,6 @@ export const CombinedChart: React.FC<CombinedChartProps> = ({
           
           {/* Controls */}
           <div className="flex items-center space-x-4">
-            {/* Resolution Selector */}
-            <div className="flex items-center space-x-2">
-              <span className="text-sm text-gray-600">Resolution:</span>
-              <select
-                value={resolution}
-                onChange={(e) => setResolution(e.target.value)}
-                className="text-sm text-gray-900 border border-gray-300 rounded-lg px-3 py-1 bg-white hover:border-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-              >
-                <option value="1" >1m</option>
-                <option value="3">3m</option>
-                <option value="5">5m</option>
-                <option value="15">15m</option>
-                <option value="30">30m</option>
-              </select>
-            </div>
-
             {/* Calculation Method Toggle */}
             <div className="flex items-center space-x-2">
               <span className="text-sm text-gray-600">Calculation:</span>
@@ -936,9 +1025,9 @@ export const CombinedChart: React.FC<CombinedChartProps> = ({
       </div>
 
       {/* Chart Container */}
-      <div className="p-4">
+      <div className={isFullscreen ? 'flex-1 overflow-hidden' : 'p-4'}>
         {error ? (
-          <div className="flex items-center justify-center h-96 bg-red-50 rounded-lg">
+          <div className={`${isFullscreen ? 'h-full' : 'h-96'} flex items-center justify-center bg-red-50 rounded-lg`}>
             <div className="text-center">
               <svg className="w-12 h-12 text-red-400 mx-auto mb-4" fill="currentColor" viewBox="0 0 20 20">
                 <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clipRule="evenodd" />
@@ -949,14 +1038,66 @@ export const CombinedChart: React.FC<CombinedChartProps> = ({
           </div>
         ) : (
           <div
-            ref={chartContainerRef}
-            className="w-full h-[900px] rounded-lg border border-gray-200"
-          />
+            ref={(el) => {
+              chartContainerRef.current = el;
+              setContainerElement(el);
+            }}
+            className={`
+              relative w-full rounded-lg border border-gray-200
+              ${isFullscreen ? 'h-full min-h-0' : 'h-[1000px]'}
+            `}
+            style={isFullscreen ? {
+              height: 'calc(100vh - 120px)', // Account for header height in fullscreen
+              minHeight: '400px'
+            } : {}}
+          >
+            {/* Floating Controls Inside Chart */}
+            <div className="absolute top-4 right-4 z-10 flex items-center space-x-2">
+              {/* Fullscreen Button */}
+              <button
+                onClick={toggleFullscreen}
+                className="flex items-center space-x-2 px-3 py-1 text-sm text-white bg-black bg-opacity-50 hover:bg-opacity-70 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 transition-all duration-200"
+                title={isFullscreen ? 'Exit fullscreen' : 'Enter fullscreen'}
+              >
+                {isFullscreen ? (
+                  <>
+                    <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
+                      <path fillRule="evenodd" d="M9 9V3h2v6h6v2h-6v6H9v-6H3V9h6z" clipRule="evenodd" />
+                    </svg>
+                    <span>Exit</span>
+                  </>
+                ) : (
+                  <>
+                    <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
+                      <path fillRule="evenodd" d="M3 4a1 1 0 011-1h4a1 1 0 010 2H6.414l2.293 2.293a1 1 0 11-1.414 1.414L5 6.414V8a1 1 0 01-2 0V4zm9 1a1 1 0 010-2h4a1 1 0 011 1v4a1 1 0 01-2 0V6.414l-2.293 2.293a1 1 0 11-1.414-1.414L13.586 5H12zm-9 7a1 1 0 012 0v1.586l2.293-2.293a1 1 0 111.414 1.414L6.414 15H8a1 1 0 010 2H4a1 1 0 01-1-1v-4zm13-1a1 1 0 011 1v4a1 1 0 01-1 1h-4a1 1 0 010-2h1.586l-2.293-2.293a1 1 0 111.414-1.414L15 13.586V12a1 1 0 011-1z" clipRule="evenodd" />
+                    </svg>
+                    <span>Fullscreen</span>
+                  </>
+                )}
+              </button>
+
+              {/* Resolution Selector */}
+              <div className="flex items-center space-x-2 px-3 py-1 text-sm text-white bg-black bg-opacity-50 rounded-lg">
+                <span className="text-white">Resolution:</span>
+                <select
+                  value={resolution}
+                  onChange={(e) => setResolution(e.target.value)}
+                  className="text-sm text-gray-900 bg-white bg-opacity-90 rounded px-2 py-1 hover:bg-opacity-100 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                >
+                  <option value="1" >1m</option>
+                  <option value="3">3m</option>
+                  <option value="5">5m</option>
+                  <option value="15">15m</option>
+                  <option value="30">30m</option>
+                </select>
+              </div>
+            </div>
+          </div>
         )}
       </div>
       
-      {/* Chart Info */}
-      {chartData.length > 0 && !error && (
+      {/* Chart Info - Hidden in fullscreen for more chart space */}
+      {!isFullscreen && chartData.length > 0 && !error && (
         <div className="px-4 py-3 bg-gray-50 border-t border-gray-200">
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
             <div>
@@ -976,13 +1117,13 @@ export const CombinedChart: React.FC<CombinedChartProps> = ({
             <div>
               <span className="text-gray-600">Options Price Change:</span>
               <span className={`ml-1 font-medium ${
-                chartData.length >= 2 
-                  ? chartData[chartData.length - 1].close > chartData[chartData.length - 2].close 
-                    ? 'text-green-600' 
+                chartData.length >= 2
+                  ? chartData[chartData.length - 1].close > chartData[chartData.length - 2].close
+                    ? 'text-green-600'
                     : 'text-red-600'
                   : 'text-gray-600'
               }`}>
-                {chartData.length >= 2 
+                {chartData.length >= 2
                   ? `${((chartData[chartData.length - 1].close - chartData[chartData.length - 2].close) / chartData[chartData.length - 2].close * 100).toFixed(2)}%`
                   : '-'
                 }
@@ -1030,11 +1171,11 @@ export const CombinedChart: React.FC<CombinedChartProps> = ({
               <div>
                 <span className="text-gray-600">Latest CCI1:</span>
                 <span className={`ml-1 font-medium ${
-                  optionsCciData.length > 0 
-                    ? optionsCciData[optionsCciData.length - 1].value > 100 
-                      ? 'text-red-600' 
-                      : optionsCciData[optionsCciData.length - 1].value < -100 
-                        ? 'text-green-600' 
+                  optionsCciData.length > 0
+                    ? optionsCciData[optionsCciData.length - 1].value > 100
+                      ? 'text-red-600'
+                      : optionsCciData[optionsCciData.length - 1].value < -100
+                        ? 'text-green-600'
                         : 'text-gray-600'
                     : 'text-gray-600'
                 }`}>
@@ -1062,11 +1203,11 @@ export const CombinedChart: React.FC<CombinedChartProps> = ({
               <div>
                 <span className="text-gray-600">Latest CCI2:</span>
                 <span className={`ml-1 font-medium ${
-                  btcCciData.length > 0 
-                    ? btcCciData[btcCciData.length - 1].value > 100 
-                      ? 'text-red-600' 
-                      : btcCciData[btcCciData.length - 1].value < -100 
-                        ? 'text-green-600' 
+                  btcCciData.length > 0
+                    ? btcCciData[btcCciData.length - 1].value > 100
+                      ? 'text-red-600'
+                      : btcCciData[btcCciData.length - 1].value < -100
+                        ? 'text-green-600'
                         : 'text-gray-600'
                     : 'text-gray-600'
                 }`}>

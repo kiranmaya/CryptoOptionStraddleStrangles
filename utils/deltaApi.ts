@@ -185,28 +185,30 @@ export const fetchOptionChainData = async (settlementTime: string): Promise<Opti
       throw new Error('API request failed');
     }
     
-    // Filter products by settlement date and map to OptionContract interface
-    const allProducts: OptionContract[] = data.result.map((product: DeltaApiProduct) => ({
-      symbol: product.symbol,
-      contract_type: product.contract_type as 'call_options' | 'put_options',
-      strike_price: product.strike_price,
-      settlement_time: product.settlement_time,
-      underlying_asset: product.underlying_asset.symbol,
-      expiry_date: product.expiry_date || product.settlement_time.split('T')[0],
-      settlement_date: product.settlement_time.split('T')[0],
-      mark_price: product.mark_price,
-      bid_price: product.bid_price,
-      ask_price: product.ask_price,
-      volume: product.volume_24h ? Number(product.volume_24h) : undefined,
-      open_interest: product.open_interest_24h ? Number(product.open_interest_24h) : undefined
-    }));
-    
-    // Filter for the selected settlement date and separate calls and puts
+    // Filter products by settlement date and underlying asset, then map to OptionContract interface
     const selectedDate = settlementTime.split('T')[0]; // Get just the date part
-    const filteredProducts = allProducts.filter(product =>
-      product.settlement_date.startsWith(selectedDate)
-    );
+    const filteredProducts = data.result
+      .filter((product: DeltaApiProduct) => {
+        // Filter by underlying asset (BTC) and settlement date
+        return product.underlying_asset.symbol === 'BTC' &&
+               product.settlement_time.startsWith(selectedDate);
+      })
+      .map((product: DeltaApiProduct) => ({
+        symbol: product.symbol,
+        contract_type: product.contract_type as 'call_options' | 'put_options',
+        strike_price: product.strike_price,
+        settlement_time: product.settlement_time,
+        underlying_asset: product.underlying_asset.symbol,
+        expiry_date: product.expiry_date || product.settlement_time.split('T')[0],
+        settlement_date: product.settlement_time.split('T')[0],
+        mark_price: product.mark_price,
+        bid_price: product.bid_price,
+        ask_price: product.ask_price,
+        volume: product.volume_24h ? Number(product.volume_24h) : undefined,
+        open_interest: product.open_interest_24h ? Number(product.open_interest_24h) : undefined
+      }));
     
+    // Separate calls and puts
     const calls = filteredProducts
       .filter(product => product.contract_type === 'call_options')
       .sort((a, b) => parseFloat(a.strike_price) - parseFloat(b.strike_price));
@@ -223,7 +225,62 @@ export const fetchOptionChainData = async (settlementTime: string): Promise<Opti
 };
 
 
-// Helper function to test API connectivity
+export const fetchOptionChainDataByAsset = async (settlementTime: string, underlyingAsset: string = 'BTC'): Promise<OptionChainData> => {
+  try {
+    const baseUrl = 'https://api.india.delta.exchange/v2';
+    const params = new URLSearchParams({
+      contract_types: 'call_options,put_options',
+      underlying_asset: underlyingAsset
+    });
+    
+    const response = await fetchWithRetry(`${baseUrl}/products?${params}`);
+    const data: DeltaApiResponse = await response.json();
+    
+    // Check if the API response indicates success
+    if (!data.success) {
+      throw new Error('API request failed');
+    }
+    
+    // Filter products by settlement date and underlying asset, then map to OptionContract interface
+    const selectedDate = settlementTime.split('T')[0]; // Get just the date part
+    const filteredProducts = data.result
+      .filter((product: DeltaApiProduct) => {
+        // Filter by underlying asset and settlement date
+        return product.underlying_asset.symbol === underlyingAsset &&
+               product.settlement_time.startsWith(selectedDate);
+      })
+      .map((product: DeltaApiProduct) => ({
+        symbol: product.symbol,
+        contract_type: product.contract_type as 'call_options' | 'put_options',
+        strike_price: product.strike_price,
+        settlement_time: product.settlement_time,
+        underlying_asset: product.underlying_asset.symbol,
+        expiry_date: product.expiry_date || product.settlement_time.split('T')[0],
+        settlement_date: product.settlement_time.split('T')[0],
+        mark_price: product.mark_price,
+        bid_price: product.bid_price,
+        ask_price: product.ask_price,
+        volume: product.volume_24h ? Number(product.volume_24h) : undefined,
+        open_interest: product.open_interest_24h ? Number(product.open_interest_24h) : undefined
+      }));
+    
+    // Separate calls and puts
+    const calls = filteredProducts
+      .filter(product => product.contract_type === 'call_options')
+      .sort((a, b) => parseFloat(a.strike_price) - parseFloat(b.strike_price));
+    
+    const puts = filteredProducts
+      .filter(product => product.contract_type === 'put_options')
+      .sort((a, b) => parseFloat(a.strike_price) - parseFloat(b.strike_price));
+    
+    return { calls, puts };
+  } catch (err) {
+    console.error('Error fetching option chain data:', err);
+    throw err; // Re-throw to show real error instead of falling back to mock data
+  }
+};
+
+// Helper function to fetch candlestick data for charts
 
 export const fetchCandlestickData = async (
   symbol: string,
