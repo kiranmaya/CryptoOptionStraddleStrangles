@@ -49,7 +49,7 @@ export default function DeltaStraddleDashboard() {
           <div className="flex items-center justify-between h-16">
             <div>
               <h1 className="text-2xl font-bold text-gray-900">
-                Delta Exchange Options Dashboard
+                Bitcoin Options Dashboard
               </h1>
               <p className="text-sm text-gray-600">
                 Real-time options straddle & strangle analysis
@@ -209,7 +209,7 @@ export default function DeltaStraddleDashboard() {
         <footer className="mt-12 pt-6 border-t border-gray-200">
           <div className="flex items-center justify-between text-sm text-gray-600">
             <div>
-              <p>Delta Exchange Options Dashboard</p>
+              <p>BTC Options Dashboard</p>
               <p className="mt-1">
                 Real-time data from{' '}
                 <a
