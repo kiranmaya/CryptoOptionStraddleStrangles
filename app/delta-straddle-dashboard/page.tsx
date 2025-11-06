@@ -20,8 +20,8 @@ export default function DeltaStraddleDashboard() {
   // Handle date selection
   const handleDateSelect = (date: string) => {
     setSelectedDate(date);
-    // Clear selections when date changes
-    setSelections([]);
+    // NOTE: We no longer clear selections when date changes
+    // This allows selections to persist across different settlement dates
   };
 
   // Handle option selection changes
@@ -149,7 +149,12 @@ export default function DeltaStraddleDashboard() {
                         .filter(s => s.type === 'call')
                         .map((selection, index) => (
                           <div key={`call-${index}`} className="flex items-center justify-between p-2 bg-green-50 rounded border border-green-200">
-                            <span className="text-sm font-mono text-green-800">{selection.symbol}</span>
+                            <div>
+                              <span className="text-sm font-mono text-green-800">{selection.symbol}</span>
+                              <div className="text-xs text-green-600 mt-1">
+                                {new Date(selection.settlementDate).toLocaleDateString()}
+                              </div>
+                            </div>
                             <span className="text-sm text-green-600">${selection.price || 'N/A'}</span>
                           </div>
                         ))}
@@ -166,7 +171,12 @@ export default function DeltaStraddleDashboard() {
                         .filter(s => s.type === 'put')
                         .map((selection, index) => (
                           <div key={`put-${index}`} className="flex items-center justify-between p-2 bg-red-50 rounded border border-red-200">
-                            <span className="text-sm font-mono text-red-800">{selection.symbol}</span>
+                            <div>
+                              <span className="text-sm font-mono text-red-800">{selection.symbol}</span>
+                              <div className="text-xs text-red-600 mt-1">
+                                {new Date(selection.settlementDate).toLocaleDateString()}
+                              </div>
+                            </div>
                             <span className="text-sm text-red-600">${selection.price || 'N/A'}</span>
                           </div>
                         ))}

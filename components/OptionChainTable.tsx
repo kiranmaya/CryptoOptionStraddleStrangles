@@ -13,6 +13,7 @@ export interface Selection {
   symbol: string;
   strike: number;
   price?: string;
+  settlementDate: string; // Add settlement date to each selection
 }
 
 export const OptionChainTable: React.FC<OptionChainTableProps> = ({
@@ -44,9 +45,9 @@ export const OptionChainTable: React.FC<OptionChainTableProps> = ({
 
   useEffect(() => {
     let isMounted = true;
-    
+     
     const loadOptionChain = async () => {
-      if (!selectedDate || isDataLoaded) return;
+      if (!selectedDate) return;
       
       try {
         setLoading(true);
@@ -59,11 +60,8 @@ export const OptionChainTable: React.FC<OptionChainTableProps> = ({
           setIsDataLoaded(true);
         }
         
-        // Clear selections when date changes
-        if (isMounted) {
-          setSelections([]);
-          onSelectionChange([]);
-        }
+        // NOTE: We no longer clear selections when date changes
+        // This allows selections to persist across date switches
       } catch (err) {
         if (isMounted) {
           console.error('Error loading option chain:', err);
@@ -76,19 +74,17 @@ export const OptionChainTable: React.FC<OptionChainTableProps> = ({
       }
     };
 
-    if (selectedDate && !isDataLoaded) {
+    if (selectedDate) {
       loadOptionChain();
     }
 
     return () => {
       isMounted = false;
     };
-  }, [selectedDate, onSelectionChange, isDataLoaded]);
+  }, [selectedDate, onSelectionChange]);
 
-  // Reset data loaded state when selectedDate changes
-  useEffect(() => {
-    setIsDataLoaded(false);
-  }, [selectedDate]);
+  // Remove the reset of data loaded state to allow multiple date loading
+  // This enables selections to persist across date switches
 
   const handleCellClick = useCallback((option: OptionContract, type: 'call' | 'put') => {
     const selection: Selection = {
@@ -96,7 +92,8 @@ export const OptionChainTable: React.FC<OptionChainTableProps> = ({
       symbol: option.symbol,
       strike: parseFloat(option.strike_price),
       // Remove price dependency - we'll fetch candlestick data using symbol
-      price: undefined
+      price: undefined,
+      settlementDate: selectedDate
     };
 
     const isSelected = selections.some(s => s.symbol === selection.symbol);
