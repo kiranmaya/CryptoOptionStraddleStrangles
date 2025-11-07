@@ -1,7 +1,7 @@
 // Option Chain Table Component
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { OptionContract, fetchBTCPrice, fetchOptionChainData, getCurrentOptionPrice } from '../utils/deltaApi';
+import { OptionContract, fetchBTCPrice, fetchOptionChainData } from '../utils/deltaApi';
 import { Position, PositionManager, createPosition } from '../utils/positionManager';
 import { useDeltaWebSocket } from '../utils/websocketClient';
 
@@ -42,10 +42,9 @@ export const OptionChainTable: React.FC<OptionChainTableProps> = ({
   const [selectedQuantities, setSelectedQuantities] = useState<Record<string, number>>({});
   const [livePrices, setLivePrices] = useState<Map<string, { bid: number; ask: number; mark: number; timestamp: number }>>(new Map());
   const [connectionStatus, setConnectionStatus] = useState<'connected' | 'disconnected' | 'connecting'>('connecting');
-  const [isPollingPrices, setIsPollingPrices] = useState(false);
 
   // WebSocket hook
-  const { connected, subscribeTickers, onMessage, offMessage } = useDeltaWebSocket();
+  const { connected, subscribeTickers, onMessage, offMessage, subscribeMarkPrices } = useDeltaWebSocket();
 
   // Debug: Check WebSocket status
   useEffect(() => {
@@ -244,15 +243,9 @@ export const OptionChainTable: React.FC<OptionChainTableProps> = ({
         onPositionChange(positionManager.getAllPositions());
       }
 
-      // Update price in background (non-blocking) - only if we added a new position
+      // WebSocket provides live prices - no need for REST API update
       if (!isCurrentlyLong) {
-        getCurrentOptionPrice(option.symbol).then(currentPrice => {
-          if (currentPrice > 0) {
-            console.log(`Price updated for ${option.symbol}: ${currentPrice}`);
-          }
-        }).catch(err => {
-          console.warn(`Failed to update price for ${option.symbol}:`, err);
-        });
+        console.log(`Position added for ${option.symbol} - live prices will be updated via WebSocket`);
       }
     } catch (err) {
       console.error(`Error ${isCurrentlyLong ? 'removing' : 'buying'} ${option.symbol}:`, err);
@@ -335,15 +328,9 @@ export const OptionChainTable: React.FC<OptionChainTableProps> = ({
         onPositionChange(positionManager.getAllPositions());
       }
 
-      // Update price in background (non-blocking) - only if we added a new position
+      // WebSocket provides live prices - no need for REST API update
       if (!isCurrentlyShort) {
-        getCurrentOptionPrice(option.symbol).then(currentPrice => {
-          if (currentPrice > 0) {
-            console.log(`Price updated for ${option.symbol}: ${currentPrice}`);
-          }
-        }).catch(err => {
-          console.warn(`Failed to update price for ${option.symbol}:`, err);
-        });
+        console.log(`Position added for ${option.symbol} - live prices will be updated via WebSocket`);
       }
     } catch (err) {
       console.error(`Error ${isCurrentlyShort ? 'removing' : 'selling'} ${option.symbol}:`, err);
@@ -410,23 +397,29 @@ export const OptionChainTable: React.FC<OptionChainTableProps> = ({
   }, [selectedDate]);
   // WebSocket price update handler
   const handlePriceUpdate = useCallback((data: unknown) => {
+    // Ensure we have valid data
+    if (!data) {
+      console.log('❌ No data received in price update');
+      return;
+    }
+    
     const payload = data as Record<string, unknown>;
     
     console.log('💰 Raw price update received:', payload);
     
     // Handle v2/ticker payload structure
-    if (payload.symbol) {
+    if (payload && typeof payload === 'object' && 'symbol' in payload && payload.symbol) {
       const symbol = String(payload.symbol);
       const timestamp = Date.now();
       
-      // Extract bid, ask, and mark prices
-      const bid = payload.bid_price ? Number(payload.bid_price) :
-                 payload.bid ? Number(payload.bid) : 0;
-      const ask = payload.ask_price ? Number(payload.ask_price) :
-                 payload.ask ? Number(payload.ask) : 0;
-      const mark = payload.mark_price ? Number(payload.mark_price) :
-                   payload.price ? Number(payload.price) :
-                   payload.close ? Number(payload.close) : 0;
+      // Extract bid, ask, and mark prices with safe type checking
+      const bid = (payload.bid_price !== undefined) ? Number(payload.bid_price) :
+                 (payload.bid !== undefined) ? Number(payload.bid) : 0;
+      const ask = (payload.ask_price !== undefined) ? Number(payload.ask_price) :
+                 (payload.ask !== undefined) ? Number(payload.ask) : 0;
+      const mark = (payload.mark_price !== undefined) ? Number(payload.mark_price) :
+                  (payload.price !== undefined) ? Number(payload.price) :
+                  (payload.close !== undefined) ? Number(payload.close) : 0;
       
       if (bid > 0 || ask > 0 || mark > 0) {
         // Remove MARK: prefix if present for storage
@@ -449,42 +442,51 @@ export const OptionChainTable: React.FC<OptionChainTableProps> = ({
         console.log(`⚠️ Zero or invalid prices for ${symbol}:`, { bid, ask, mark });
       }
     } else {
-      console.log('❌ Unrecognized price update format:', payload);
+      console.log('❌ Unrecognized price update format or missing symbol:', payload);
     }
   }, []);
 
   // Subscribe to all option symbols and BTC price
   useEffect(() => {
     if (optionData.calls.length > 0 || optionData.puts.length > 0) {
-      // Collect all unique symbols with MARK: prefix for options
-      const allSymbols = [
-        'BTCUSD', // Always include BTC
+      // Separate symbols by channel type
+      const tickerSymbols = ['BTCUSD']; // Use v2/ticker for BTCUSD
+      
+      // Use mark_price channel for option symbols (requires MARK: prefix)
+      const markPriceSymbols = [
         ...optionData.calls.map(call => `MARK:${call.symbol}`),
         ...optionData.puts.map(put => `MARK:${put.symbol}`)
       ];
       
-      // Remove duplicates
-      const uniqueSymbols = Array.from(new Set(allSymbols));
-      
-      console.log('🌐 Subscribing to ticker symbols:', uniqueSymbols);
+      console.log('🌐 Subscribing to symbols:');
+      console.log('  v2/ticker:', tickerSymbols);
+      console.log('  mark_price:', markPriceSymbols);
       console.log('📊 Option data loaded:', {
         calls: optionData.calls.length,
         puts: optionData.puts.length
       });
       
-      if (uniqueSymbols.length > 0) {
-        subscribeTickers(uniqueSymbols);
+      // Subscribe to BTC ticker
+      if (tickerSymbols.length > 0) {
+        subscribeTickers(tickerSymbols);
+      }
+      
+      // Subscribe to option mark prices
+      if (markPriceSymbols.length > 0) {
+        subscribeMarkPrices(markPriceSymbols);
       }
     }
-  }, [optionData.calls, optionData.puts, subscribeTickers]);
+  }, [optionData.calls, optionData.puts, subscribeTickers, subscribeMarkPrices]);
 
   // Set up message handlers
   useEffect(() => {
     onMessage('v2/ticker', handlePriceUpdate);
+    onMessage('mark_price', handlePriceUpdate);
     onMessage('ticker', handlePriceUpdate); // Also listen for the old format for compatibility
     
     return () => {
       offMessage('v2/ticker', handlePriceUpdate);
+      offMessage('mark_price', handlePriceUpdate);
       offMessage('ticker', handlePriceUpdate);
     };
   }, [handlePriceUpdate, onMessage, offMessage]);
@@ -509,71 +511,7 @@ export const OptionChainTable: React.FC<OptionChainTableProps> = ({
     return allCalls.slice(startIndex, endIndex + 1);
   }, [optionData.calls, currentStrike]);
 
-  // Fetch live price for a single symbol
-  const fetchLivePrice = useCallback(async (symbol: string) => {
-    try {
-      // Get ticker data for this symbol
-      const response = await fetch(`https://api.india.delta.exchange/v2/tickers/${symbol}`);
-      const data = await response.json();
-      
-      if (data.success && data.result) {
-        const bid = parseFloat(data.result.bid_price || '0');
-        const ask = parseFloat(data.result.ask_price || '0');
-        const mark = parseFloat(data.result.mark_price || '0');
-        
-        if (bid > 0 || ask > 0 || mark > 0) {
-          setLivePrices(prev => new Map(prev).set(symbol, {
-            bid,
-            ask,
-            mark: mark || ask || bid,
-            timestamp: Date.now()
-          }));
-        }
-      }
-    } catch (err) {
-      console.warn(`Failed to fetch live price for ${symbol}:`, err);
-    }
-  }, []);
-
-  // Poll for all visible option prices
-  const pollAllPrices = useCallback(async () => {
-    if (isPollingPrices || optionData.calls.length === 0) return;
-    
-    setIsPollingPrices(true);
-    
-    try {
-      // Get all symbols that are visible in the table
-      const allVisibleSymbols = getFilteredCalls.map(call => call.symbol)
-        .concat(optionData.puts.map(put => put.symbol))
-        .filter(Boolean);
-      
-      // Add BTC price
-      allVisibleSymbols.push('BTCUSD');
-      
-      // Remove duplicates
-      const uniqueSymbols = Array.from(new Set(allVisibleSymbols));
-      
-      // Fetch prices for all symbols
-      await Promise.allSettled(
-        uniqueSymbols.map(symbol => fetchLivePrice(symbol))
-      );
-    } finally {
-      setIsPollingPrices(false);
-    }
-  }, [isPollingPrices, optionData.calls, optionData.puts, getFilteredCalls, fetchLivePrice]);
-
-  // Set up price polling
-  useEffect(() => {
-    if (isDataLoaded && optionData.calls.length > 0) {
-      // Initial price fetch
-      pollAllPrices();
-      
-      // Set up polling interval
-      const interval = setInterval(pollAllPrices, 30000); // Poll every 30 seconds
-      
-      return () => clearInterval(interval);
-    }
-  }, [isDataLoaded, pollAllPrices]);
+  // WebSocket-based price updates - no REST API polling needed
 
   // Get live price for a symbol (with fallback)
   const getLivePrices = useCallback((symbol: string): { bid: number; ask: number; mark: number } => {

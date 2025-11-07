@@ -1,4 +1,5 @@
 // BTC Chart Component for Underlying Price Tracking
+// Enhanced with interactive features: tooltips, zoom controls, export, better mouse interactions
 
 import {
   CandlestickSeries,
@@ -9,7 +10,7 @@ import {
   ISeriesApi,
   UTCTimestamp,
 } from 'lightweight-charts';
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { fetchBTCPrice, fetchCandlestickData } from '../utils/deltaApi';
 import { useDeltaWebSocket } from '../utils/websocketClient';
 
@@ -24,6 +25,30 @@ interface PriceUpdate {
   timestamp: number;
 }
 
+// Time range for chart filtering
+type TimeRange = '1D' | '7D' | '30D' | '90D' | 'ALL';
+
+// Tooltip data interface for enhanced interactivity
+interface TooltipData {
+  time: number;
+  price: number;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  volume?: number;
+}
+
+// Export data interface
+interface ExportDataPoint {
+  time: string;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  volume?: number;
+}
+
 export const BtcChart: React.FC<BtcChartProps> = ({
   initialResolution = '1'
 }) => {
@@ -36,6 +61,13 @@ export const BtcChart: React.FC<BtcChartProps> = ({
   const [resolution, setResolution] = useState(initialResolution);
   const [currentPrice, setCurrentPrice] = useState<number>(0);
   const [priceChange, setPriceChange] = useState<number>(0);
+  
+  // Interactive features state
+  const [selectedTimeRange, setSelectedTimeRange] = useState<TimeRange>('30D');
+  const [showTooltip, setShowTooltip] = useState(false);
+  const [tooltipData, setTooltipData] = useState<TooltipData | null>(null);
+  const [isZoomed, setIsZoomed] = useState(false);
+  const [chartMode, setChartMode] = useState<'trading' | 'analysis'>('analysis');
 
   const { connected, subscribeMarkPrices, onMessage, offMessage } = useDeltaWebSocket();
 
@@ -49,6 +81,154 @@ export const BtcChart: React.FC<BtcChartProps> = ({
     { value: '240', label: '4h' },
     { value: '1440', label: '1d' }
   ];
+
+  // Helper function to filter data by time range
+  const filterDataByTimeRange = <T extends { time: number }>(data: T[], timeRange: TimeRange): T[] => {
+    if (timeRange === 'ALL') return data;
+    
+    const now = Math.floor(Date.now() / 1000);
+    let timeThreshold: number;
+    
+    switch (timeRange) {
+      case '1D':
+        timeThreshold = now - 24 * 60 * 60;
+        break;
+      case '7D':
+        timeThreshold = now - 7 * 24 * 60 * 60;
+        break;
+      case '30D':
+        timeThreshold = now - 30 * 24 * 60 * 60;
+        break;
+      case '90D':
+        timeThreshold = now - 90 * 24 * 60 * 60;
+        break;
+      default:
+        return data;
+    }
+    
+    return data.filter((item: T) => item.time >= timeThreshold);
+  };
+
+  // Helper function to export chart data to CSV
+  const exportToCSV = (data: ExportDataPoint[], filename: string) => {
+    if (data.length === 0) return;
+    
+    const headers = Object.keys(data[0]) as (keyof ExportDataPoint)[];
+    const csvContent = [
+      headers.join(','),
+      ...data.map((row: ExportDataPoint) => 
+        headers.map((header: keyof ExportDataPoint) => String(row[header])).join(',')
+      )
+    ].join('\n');
+    
+    const blob = new Blob([csvContent], { type: 'text/csv' });
+    const url = window.URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = filename;
+    link.click();
+    window.URL.revokeObjectURL(url);
+  };
+
+  // Tooltip handlers
+  const handleMouseMove = useCallback((param: any) => {
+    if (!param?.time || !chartRef.current) return;
+
+    const time = param.time as number;
+    const dataPoint = chartData.find(d => d.time === time);
+
+    if (dataPoint) {
+      setTooltipData({
+        time,
+        price: dataPoint.close,
+        open: dataPoint.open,
+        high: dataPoint.high,
+        low: dataPoint.low,
+        close: dataPoint.close,
+      });
+      setShowTooltip(true);
+    }
+  }, [chartData]);
+
+  const handleMouseLeave = useCallback(() => {
+    setShowTooltip(false);
+    setTooltipData(null);
+  }, []);
+
+  // Export handlers
+  const exportChartData = useCallback(() => {
+    const dataToExport: ExportDataPoint[] = chartData.map(item => ({
+      time: new Date(item.time * 1000).toISOString(),
+      open: item.open,
+      high: item.high,
+      low: item.low,
+      close: item.close,
+    }));
+    
+    exportToCSV(dataToExport, `btc-chart-data-${new Date().toISOString().split('T')[0]}.csv`);
+  }, [chartData]);
+
+  // Zoom controls
+  const handleZoomIn = useCallback(() => {
+    if (chartRef.current) {
+      const timeScale = chartRef.current.timeScale();
+      const visibleRange = timeScale.getVisibleRange();
+      if (visibleRange) {
+        const fromTime = visibleRange.from as number;
+        const toTime = visibleRange.to as number;
+        const center = (fromTime + toTime) / 2;
+        const range = (toTime - fromTime) * 0.5;
+        timeScale.setVisibleRange({
+          from: Math.max(center - range, 0) as UTCTimestamp,
+          to: (center + range) as UTCTimestamp
+        });
+        setIsZoomed(true);
+      }
+    }
+  }, []);
+
+  const handleZoomOut = useCallback(() => {
+    if (chartRef.current) {
+      chartRef.current.timeScale().fitContent();
+      setIsZoomed(false);
+    }
+  }, []);
+
+  // Time range filter
+  const applyTimeRange = useCallback((range: TimeRange) => {
+    setSelectedTimeRange(range);
+    if (chartRef.current) {
+      const timeScale = chartRef.current.timeScale();
+      if (range === 'ALL') {
+        timeScale.fitContent();
+      } else {
+        const now = Math.floor(Date.now() / 1000);
+        let timeThreshold: number;
+        
+        switch (range) {
+          case '1D':
+            timeThreshold = now - 24 * 60 * 60;
+            break;
+          case '7D':
+            timeThreshold = now - 7 * 24 * 60 * 60;
+            break;
+          case '30D':
+            timeThreshold = now - 30 * 24 * 60 * 60;
+            break;
+          case '90D':
+            timeThreshold = now - 90 * 24 * 60 * 60;
+            break;
+          default:
+            return;
+        }
+        
+        timeScale.setVisibleRange({
+          from: timeThreshold as UTCTimestamp,
+          to: now as UTCTimestamp
+        });
+      }
+    }
+  }, []);
 
   const resolveTheme = () => {
     const isDark = document.documentElement.classList.contains('dark');
@@ -162,7 +342,9 @@ export const BtcChart: React.FC<BtcChartProps> = ({
     if (!seriesRef.current) return;
 
     if (chartData.length > 0) {
-      const formattedData = chartData.map(candle => ({
+      const filteredData = filterDataByTimeRange(chartData, selectedTimeRange);
+      
+      const formattedData = filteredData.map(candle => ({
         time: candle.time as UTCTimestamp,
         open: candle.open,
         high: candle.high,
@@ -174,7 +356,7 @@ export const BtcChart: React.FC<BtcChartProps> = ({
     } else {
       seriesRef.current.setData([]);
     }
-  }, [chartData]);
+  }, [chartData, selectedTimeRange]);
 
   useEffect(() => {
     const loadBtcData = async () => {
@@ -299,20 +481,53 @@ export const BtcChart: React.FC<BtcChartProps> = ({
             </div>
           </div>
           
-          {/* Resolution Selector */}
-          <div className="flex items-center space-x-2">
-            <span className="text-sm text-gray-900">Resolution:</span>
-            <select
-              value={resolution}
-              onChange={(e) => handleResolutionChange(e.target.value)}
-              className="text-sm border text-amber-700 border-gray-300 rounded-lg px-3 py-1 bg-white hover:border-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-            >
-              {resolutions.map((res) => (
-                <option key={res.value} value={res.value} className='text-amber-700'>
-                  {res.label}
-                </option>
-              ))}
-            </select>
+          {/* Chart Mode Toggle */}
+          <div className="flex items-center space-x-4">
+            <div className="flex items-center space-x-2">
+              <span className="text-sm text-gray-600">Mode:</span>
+              <div className="flex bg-gray-100 rounded-lg p-1">
+                <button
+                  onClick={() => setChartMode('analysis')}
+                  className={`
+                    px-3 py-1 text-sm rounded-md transition-all duration-200
+                    ${chartMode === 'analysis'
+                      ? 'bg-white text-blue-600 shadow-sm'
+                      : 'text-gray-600 hover:text-gray-800'
+                    }
+                  `}
+                >
+                  Analysis
+                </button>
+                <button
+                  onClick={() => setChartMode('trading')}
+                  className={`
+                    px-3 py-1 text-sm rounded-md transition-all duration-200
+                    ${chartMode === 'trading'
+                      ? 'bg-white text-blue-600 shadow-sm'
+                      : 'text-gray-600 hover:text-gray-800'
+                    }
+                  `}
+                >
+                  Trading
+                </button>
+              </div>
+            </div>
+            
+            {/* Resolution Selector */}
+            <div className="flex items-center space-x-2">
+              <span className="text-sm text-gray-600">Resolution:</span>
+              <select
+                value={resolution}
+                onChange={(e) => handleResolutionChange(e.target.value)}
+                className="text-sm border text-amber-700 border-gray-300 rounded-lg px-3 py-1 bg-white hover:border-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+              >
+                {resolutions.map((res) => (
+                  <option key={res.value} value={res.value} className='text-amber-700'>
+                    {res.label}
+                  </option>
+                ))}
+              </select>
+            </div>
           </div>
         </div>
         
@@ -338,6 +553,68 @@ export const BtcChart: React.FC<BtcChartProps> = ({
             </div>
           )}
         </div>
+
+        {/* Interactive Controls Row */}
+        <div className="flex items-center justify-between mt-4 pt-4 border-t border-gray-200">
+          {/* Time Range Controls */}
+          <div className="flex items-center space-x-2">
+            <span className="text-sm text-gray-600">Time Range:</span>
+            <div className="flex bg-gray-100 rounded-lg p-1">
+              {(['1D', '7D', '30D', '90D', 'ALL'] as TimeRange[]).map((range) => (
+                <button
+                  key={range}
+                  onClick={() => applyTimeRange(range)}
+                  className={`
+                    px-3 py-1 text-sm rounded-md transition-all duration-200
+                    ${selectedTimeRange === range
+                      ? 'bg-white text-blue-600 shadow-sm'
+                      : 'text-gray-600 hover:text-gray-800'
+                    }
+                  `}
+                >
+                  {range}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Zoom Controls */}
+          <div className="flex items-center space-x-2">
+            <span className="text-sm text-gray-600">Zoom:</span>
+            <div className="flex bg-gray-100 rounded-lg p-1">
+              <button
+                onClick={handleZoomIn}
+                className="px-3 py-1 text-sm rounded-md text-gray-600 hover:text-gray-800 hover:bg-white transition-all duration-200"
+                title="Zoom In"
+              >
+                <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
+                  <path fillRule="evenodd" d="M8 4a4 4 0 100 8 4 4 0 000-8zM2 8a6 6 0 1110.89 3.476l4.817 4.817a1 1 0 01-1.414 1.414l-4.816-4.816A6 6 0 012 8z" clipRule="evenodd" />
+                </svg>
+              </button>
+              <button
+                onClick={handleZoomOut}
+                className="px-3 py-1 text-sm rounded-md text-gray-600 hover:text-gray-800 hover:bg-white transition-all duration-200"
+                title="Zoom Out / Reset"
+              >
+                <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
+                  <path fillRule="evenodd" d="M5 10a1 1 0 011-1h8a1 1 0 110 2H6a1 1 0 01-1-1z" clipRule="evenodd" />
+                </svg>
+              </button>
+            </div>
+          </div>
+
+          {/* Export Button */}
+          <button
+            onClick={exportChartData}
+            className="flex items-center space-x-2 px-3 py-1 text-sm text-gray-600 hover:text-gray-800 hover:bg-gray-100 rounded-lg transition-all duration-200"
+            title="Export Chart Data"
+          >
+            <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
+              <path fillRule="evenodd" d="M3 17a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zm3.293-7.707a1 1 0 011.414 0L9 10.586V3a1 1 0 112 0v7.586l1.293-1.293a1 1 0 111.414 1.414l-3 3a1 1 0 01-1.414 0l-3-3a1 1 0 010-1.414z" clipRule="evenodd" />
+            </svg>
+            <span>Export</span>
+          </button>
+        </div>
       </div>
 
       {/* Chart Container */}
@@ -355,8 +632,60 @@ export const BtcChart: React.FC<BtcChartProps> = ({
         ) : (
           <div
             ref={chartContainerRef}
-            className="w-full h-60 rounded-lg border border-gray-200"
-          />
+            className="relative w-full h-60 rounded-lg border border-gray-200"
+          >
+            {/* Interactive Tooltip */}
+            {showTooltip && tooltipData && (
+              <div 
+                className="absolute top-4 left-4 z-20 bg-white border border-gray-200 rounded-lg shadow-lg p-3 min-w-48"
+                style={{
+                  background: 'rgba(255, 255, 255, 0.95)',
+                  backdropFilter: 'blur(10px)',
+                  border: '1px solid rgba(0, 0, 0, 0.1)',
+                }}
+              >
+                <div className="text-sm font-semibold text-gray-900 mb-2">
+                  {new Date(tooltipData.time * 1000).toLocaleString()}
+                </div>
+                <div className="space-y-1">
+                  <div className="flex justify-between">
+                    <span className="text-xs text-gray-600">Price:</span>
+                    <span className="text-xs font-medium text-gray-900">
+                      ${tooltipData.price.toFixed(2)}
+                    </span>
+                  </div>
+                  {chartMode === 'trading' && (
+                    <>
+                      <div className="flex justify-between">
+                        <span className="text-xs text-gray-600">Open:</span>
+                        <span className="text-xs font-medium text-gray-900">
+                          ${tooltipData.open.toFixed(2)}
+                        </span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-xs text-gray-600">High:</span>
+                        <span className="text-xs font-medium text-gray-900">
+                          ${tooltipData.high.toFixed(2)}
+                        </span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-xs text-gray-600">Low:</span>
+                        <span className="text-xs font-medium text-gray-900">
+                          ${tooltipData.low.toFixed(2)}
+                        </span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-xs text-gray-600">Close:</span>
+                        <span className="text-xs font-medium text-gray-900">
+                          ${tooltipData.close.toFixed(2)}
+                        </span>
+                      </div>
+                    </>
+                  )}
+                </div>
+              </div>
+            )}
+          </div>
         )}
       </div>
       
@@ -381,6 +710,36 @@ export const BtcChart: React.FC<BtcChartProps> = ({
               </span>
             </div>
           </div>
+          
+          {/* Additional Info for Trading Mode */}
+          {chartMode === 'trading' && chartData.length > 0 && (
+            <div className="grid grid-cols-4 gap-4 text-xs text-gray-600 mt-3 pt-3 border-t border-gray-200">
+              <div>
+                <span>Latest Open:</span>
+                <span className="ml-1 font-medium text-gray-900">
+                  ${chartData[chartData.length - 1].open.toFixed(2)}
+                </span>
+              </div>
+              <div>
+                <span>Latest High:</span>
+                <span className="ml-1 font-medium text-gray-900">
+                  ${chartData[chartData.length - 1].high.toFixed(2)}
+                </span>
+              </div>
+              <div>
+                <span>Latest Low:</span>
+                <span className="ml-1 font-medium text-gray-900">
+                  ${chartData[chartData.length - 1].low.toFixed(2)}
+                </span>
+              </div>
+              <div>
+                <span>Latest Close:</span>
+                <span className="ml-1 font-medium text-gray-900">
+                  ${chartData[chartData.length - 1].close.toFixed(2)}
+                </span>
+              </div>
+            </div>
+          )}
         </div>
       )}
     </div>

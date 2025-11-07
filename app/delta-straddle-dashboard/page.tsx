@@ -7,7 +7,6 @@ import { BtcChart } from '../../components/BtcChart';
 import { ChartSection } from '../../components/ChartContainer';
 import { CombinedCandleSticksChart } from '../../components/CombinedCandleSticksChart';
 import { OptionChainTable, Selection } from '../../components/OptionChainTable';
-import { StrategyBuilderChart } from '../../components/StrategyBuilderChart';
  
 import { SimplePnLChart } from '@/components/OptionsStratgyBuilderPnLChart';
 import { SettlementDateTabs } from '../../components/SettlementDateTabs';
@@ -144,11 +143,7 @@ export default function DeltaStraddleDashboard() {
               onCalculationChange={handleCalculationMethodChange}
             />
 
-            {/* Strategy Builder Chart */}
-            <StrategyBuilderChart
-              selections={selections}
-              positions={positions}
-            />
+         
 
             {/* Portfolio P&L Chart */}
             <SimplePnLChart

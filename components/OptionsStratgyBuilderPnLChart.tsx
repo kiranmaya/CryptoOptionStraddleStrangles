@@ -1,4 +1,4 @@
-// P&L Chart with Live Price Updates via WebSocket
+// P&L Chart with Live Price Updates via WebSocket and Interactive Features
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { fetchBTCPrice } from '../utils/deltaApi';
@@ -15,10 +15,19 @@ interface SimplePnLChartProps {
   positions: Position[];
 }
 
+interface TooltipData {
+  x: number;
+  y: number;
+  price: number;
+  pnl: number;
+  isVisible: boolean;
+}
+
 export const SimplePnLChart: React.FC<SimplePnLChartProps> = ({
   positions
 }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
   const [btcPrice, setBtcPrice] = useState<number>(0);
   const [pnlData, setPnlData] = useState<Array<{ btcPrice: number; pnl: number }>>([]);
   const [portfolioSummary, setPortfolioSummary] = useState({
@@ -31,6 +40,12 @@ export const SimplePnLChart: React.FC<SimplePnLChartProps> = ({
   const [loading, setLoading] = useState(false);
   const [livePrices, setLivePrices] = useState<Map<string, LivePrice>>(new Map());
   const [strikeSymbols, setStrikeSymbols] = useState<string[]>([]);
+  const [tooltip, setTooltip] = useState<TooltipData>({ x: 0, y: 0, price: 0, pnl: 0, isVisible: false });
+  const [hoveredPoint, setHoveredPoint] = useState<{ btcPrice: number; pnl: number } | null>(null);
+  const [isDragging, setIsDragging] = useState(false);
+  const [chartScale, setChartScale] = useState({ min: 0, max: 0, points: 100 });
+  const [zoomLevel, setZoomLevel] = useState(1);
+  const [panOffset, setPanOffset] = useState(0);
   
   // WebSocket hook
   const { connected, subscribeMarkPrices, onMessage, offMessage } = useDeltaWebSocket();
@@ -159,6 +174,188 @@ export const SimplePnLChart: React.FC<SimplePnLChartProps> = ({
     return livePrice?.price || 0;
   }, [livePrices]);
 
+  // Calculate nearest data point to mouse position
+  const getNearestDataPoint = useCallback((
+    mouseX: number,
+    mouseY: number,
+    scale: { min: number; max: number; points: number },
+    margin: { top: number; right: number; bottom: number; left: number },
+    chartWidth: number,
+    chartHeight: number
+  ): { btcPrice: number; pnl: number } | null => {
+    if (pnlData.length === 0) return null;
+    
+    // Convert mouse position to data coordinates
+    const minPrice = chartScale.min;
+    const maxPrice = chartScale.max;
+    const minPnl = Math.min(...pnlData.map(d => d.pnl));
+    const maxPnl = Math.max(...pnlData.map(d => d.pnl));
+    
+    const pnlPadding = (maxPnl - minPnl) * 0.1;
+    const adjustedMinPnl = minPnl - pnlPadding;
+    const adjustedMaxPnl = maxPnl + pnlPadding;
+    
+    const xToPrice = (x: number) => {
+      const relativeX = (x - margin.left) / chartWidth;
+      return minPrice + relativeX * (maxPrice - minPrice);
+    };
+    
+    const yToPnl = (y: number) => {
+      const relativeY = (margin.top + chartHeight - y) / chartHeight;
+      return adjustedMinPnl + relativeY * (adjustedMaxPnl - adjustedMinPnl);
+    };
+    
+    const mousePrice = xToPrice(mouseX);
+    
+    // Find nearest data point
+    let nearestPoint: { btcPrice: number; pnl: number } | null = null;
+    let minDistance = Infinity;
+    
+    pnlData.forEach(point => {
+      const pointX = margin.left + ((point.btcPrice - minPrice) / (maxPrice - minPrice)) * chartWidth;
+      const pointY = margin.top + chartHeight - ((point.pnl - adjustedMinPnl) / (adjustedMaxPnl - adjustedMinPnl)) * chartHeight;
+      
+      const distance = Math.sqrt(
+        Math.pow(mouseX - pointX, 2) + Math.pow(mouseY - pointY, 2)
+      );
+      
+      if (distance < minDistance) {
+        minDistance = distance;
+        nearestPoint = point;
+      }
+    });
+    
+    return nearestPoint;
+  }, [pnlData, chartScale]);
+
+  // Handle mouse move
+  const handleMouseMove = useCallback((event: React.MouseEvent<HTMLCanvasElement>) => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    
+    const rect = canvas.getBoundingClientRect();
+    const mouseX = event.clientX - rect.left;
+    const mouseY = event.clientY - rect.top;
+    
+    // Check if mouse is within chart area
+    const margin = { top: 20, right: 50, bottom: 40, left: 80 };
+    const chartWidth = rect.width - margin.left - margin.right;
+    const chartHeight = rect.height - margin.top - margin.bottom;
+    
+    if (mouseX < margin.left || mouseX > margin.left + chartWidth ||
+        mouseY < margin.top || mouseY > margin.top + chartHeight) {
+      setTooltip(prev => ({ ...prev, isVisible: false }));
+      setHoveredPoint(null);
+      return;
+    }
+    
+    const nearestPoint = getNearestDataPoint(mouseX, mouseY, chartScale, margin, chartWidth, chartHeight);
+    
+    if (nearestPoint) {
+      setHoveredPoint(nearestPoint);
+      setTooltip({
+        x: mouseX,
+        y: mouseY,
+        price: nearestPoint.btcPrice,
+        pnl: nearestPoint.pnl,
+        isVisible: true
+      });
+    } else {
+      setTooltip(prev => ({ ...prev, isVisible: false }));
+      setHoveredPoint(null);
+    }
+  }, [getNearestDataPoint, chartScale]);
+
+  // Handle mouse leave
+  const handleMouseLeave = useCallback(() => {
+    setTooltip(prev => ({ ...prev, isVisible: false }));
+    setHoveredPoint(null);
+  }, []);
+
+  // Handle mouse down for panning
+  const handleMouseDown = useCallback((event: React.MouseEvent<HTMLCanvasElement>) => {
+    setIsDragging(true);
+  }, []);
+
+  // Handle mouse up
+  const handleMouseUp = useCallback(() => {
+    setIsDragging(false);
+  }, []);
+
+  // Handle wheel for zooming
+  const handleWheel = useCallback((event: React.WheelEvent<HTMLCanvasElement>) => {
+    event.preventDefault();
+    
+    const delta = event.deltaY > 0 ? 1.1 : 0.9; // Zoom in or out
+    const newZoomLevel = Math.max(0.1, Math.min(5, zoomLevel * delta));
+    setZoomLevel(newZoomLevel);
+    
+    // Recalculate chart scale based on new zoom
+    if (btcPrice > 0) {
+      const range = btcPrice * 0.1 * newZoomLevel; // 10% range base, scaled by zoom
+      setChartScale({
+        min: btcPrice - range,
+        max: btcPrice + range,
+        points: 100
+      });
+    }
+  }, [zoomLevel, btcPrice]);
+
+  // Handle click on chart
+  const handleClick = useCallback((event: React.MouseEvent<HTMLCanvasElement>) => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    
+    const rect = canvas.getBoundingClientRect();
+    const clickX = event.clientX - rect.left;
+    const clickY = event.clientY - rect.top;
+    
+    // Check if click is within chart area and near a breakeven point
+    const margin = { top: 20, right: 50, bottom: 40, left: 80 };
+    const chartWidth = rect.width - margin.left - margin.right;
+    const chartHeight = rect.height - margin.top - margin.bottom;
+    
+    if (clickX < margin.left || clickX > margin.left + chartWidth ||
+        clickY < margin.top || clickY > margin.top + chartHeight) {
+      return;
+    }
+    
+    // Find breakeven points
+    const minPnl = Math.min(...pnlData.map(d => d.pnl));
+    const maxPnl = Math.max(...pnlData.map(d => d.pnl));
+    const pnlPadding = (maxPnl - minPnl) * 0.1;
+    const adjustedMinPnl = minPnl - pnlPadding;
+    const adjustedMaxPnl = maxPnl + pnlPadding;
+    
+    const breakevenPoints = pnlData.filter(point => 
+      Math.abs(point.pnl) < (adjustedMaxPnl - adjustedMinPnl) * 0.01
+    );
+    
+    // Check if click is near any breakeven point
+    let clickedBreakeven = false;
+    breakevenPoints.forEach(point => {
+      const pointX = margin.left + ((point.btcPrice - chartScale.min) / (chartScale.max - chartScale.min)) * chartWidth;
+      const pointY = margin.top + chartHeight - ((point.pnl - adjustedMinPnl) / (adjustedMaxPnl - adjustedMinPnl)) * chartHeight;
+      
+      const distance = Math.sqrt(
+        Math.pow(clickX - pointX, 2) + Math.pow(clickY - pointY, 2)
+      );
+      
+      if (distance < 10) { // Within 10 pixels
+        clickedBreakeven = true;
+        // You could add additional actions here, like showing detailed info
+        console.log('Clicked breakeven point at BTC price:', point.btcPrice);
+      }
+    });
+    
+    if (!clickedBreakeven) {
+      // Convert click to BTC price and show info
+      const relativeX = (clickX - margin.left) / chartWidth;
+      const clickedPrice = chartScale.min + relativeX * (chartScale.max - chartScale.min);
+      console.log('Clicked at BTC price:', clickedPrice);
+    }
+  }, [pnlData, chartScale]);
+
   // Generate P&L curve when positions or BTC price changes
   useEffect(() => {
     if (positions.length === 0) {
@@ -176,20 +373,18 @@ export const SimplePnLChart: React.FC<SimplePnLChartProps> = ({
     if (btcPrice > 0) {
       setLoading(true);
       try {
-        // Calculate price range around current BTC price (5% range)
-        const minPrice = btcPrice * 0.95; // 5% below current price
-        const maxPrice = btcPrice * 1.05; // 5% above current price
-        const points = 100; // More data points for smooth curve
+        // Use current chart scale or default range
+        const range = chartScale.min === 0 && chartScale.max === 0 
+          ? { min: btcPrice * 0.95, max: btcPrice * 1.05, points: 100 }
+          : chartScale;
 
-        const priceRange = { min: minPrice, max: maxPrice, points };
-        
         // Use live prices if available, otherwise fall back to current BTC price
         const pricesToUse = positions.map(position => ({
           position,
           price: getLivePrice(position.symbol) || btcPrice
         }));
 
-        const curve = generatePortfolioPnLCurve(positions, priceRange);
+        const curve = generatePortfolioPnLCurve(positions, range);
         setPnlData(curve);
 
         // Calculate portfolio summary using live prices
@@ -207,7 +402,19 @@ export const SimplePnLChart: React.FC<SimplePnLChartProps> = ({
         setLoading(false);
       }
     }
-  }, [positions, btcPrice, getLivePrice]);
+  }, [positions, btcPrice, getLivePrice, chartScale]);
+
+  // Initialize chart scale
+  useEffect(() => {
+    if (btcPrice > 0 && chartScale.min === 0 && chartScale.max === 0) {
+      const range = btcPrice * 0.05; // 5% range
+      setChartScale({
+        min: btcPrice - range,
+        max: btcPrice + range,
+        points: 100
+      });
+    }
+  }, [btcPrice, chartScale]);
 
   // Draw the chart
   useEffect(() => {
@@ -232,8 +439,8 @@ export const SimplePnLChart: React.FC<SimplePnLChartProps> = ({
     const chartHeight = rect.height - margin.top - margin.bottom;
 
     // Calculate scale factors
-    const minPrice = Math.min(...pnlData.map(d => d.btcPrice));
-    const maxPrice = Math.max(...pnlData.map(d => d.btcPrice));
+    const minPrice = chartScale.min;
+    const maxPrice = chartScale.max;
     const minPnl = Math.min(...pnlData.map(d => d.pnl));
     const maxPnl = Math.max(...pnlData.map(d => d.pnl));
 
@@ -332,11 +539,12 @@ export const SimplePnLChart: React.FC<SimplePnLChartProps> = ({
     // Mark current BTC price position
     if (btcPrice >= minPrice && btcPrice <= maxPrice) {
       const currentX = priceToX(btcPrice);
-      const currentY = pnlToY(generatePortfolioPnLCurve(positions, { 
+      const currentCurve = generatePortfolioPnLCurve(positions, { 
         min: btcPrice, 
         max: btcPrice, 
         points: 1 
-      })[0]?.pnl || 0);
+      });
+      const currentY = pnlToY(currentCurve[0]?.pnl || 0);
       
       // Draw current price vertical line
       ctx.strokeStyle = '#f59e0b';
@@ -356,6 +564,30 @@ export const SimplePnLChart: React.FC<SimplePnLChartProps> = ({
       ctx.strokeStyle = '#fff';
       ctx.lineWidth = 2;
       ctx.stroke();
+    }
+
+    // Highlight hovered point
+    if (hoveredPoint) {
+      const hoverX = priceToX(hoveredPoint.btcPrice);
+      const hoverY = pnlToY(hoveredPoint.pnl);
+      
+      // Draw highlight circle
+      ctx.fillStyle = 'rgba(59, 130, 246, 0.2)';
+      ctx.beginPath();
+      ctx.arc(hoverX, hoverY, 12, 0, 2 * Math.PI);
+      ctx.fill();
+      
+      ctx.strokeStyle = '#3b82f6';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(hoverX, hoverY, 12, 0, 2 * Math.PI);
+      ctx.stroke();
+      
+      // Draw center point
+      ctx.fillStyle = '#3b82f6';
+      ctx.beginPath();
+      ctx.arc(hoverX, hoverY, 4, 0, 2 * Math.PI);
+      ctx.fill();
     }
 
     // Add labels
@@ -389,7 +621,15 @@ export const SimplePnLChart: React.FC<SimplePnLChartProps> = ({
     ctx.fillText('P&L ($)', 0, 0);
     ctx.restore();
 
-  }, [pnlData, btcPrice, positions]);
+    // Add zoom level indicator
+    if (zoomLevel !== 1) {
+      ctx.fillStyle = '#6b7280';
+      ctx.font = '11px Inter, system-ui, sans-serif';
+      ctx.textAlign = 'right';
+      ctx.fillText(`Zoom: ${zoomLevel.toFixed(1)}x`, rect.width - 10, 20);
+    }
+
+  }, [pnlData, btcPrice, positions, hoveredPoint, zoomLevel, chartScale]);
 
   const getPortfolioDescription = () => {
     if (positions.length === 0) {
@@ -398,6 +638,19 @@ export const SimplePnLChart: React.FC<SimplePnLChartProps> = ({
     const { totalUnrealizedPnl, totalMargin, longPositions, shortPositions } = portfolioSummary;
     return `Net P&L: ${formatPnl(totalUnrealizedPnl)} | Margin: ${formatPnl(totalMargin)} | ${longPositions}L/${shortPositions}S`;
   };
+
+  // Reset zoom function
+  const resetZoom = useCallback(() => {
+    setZoomLevel(1);
+    if (btcPrice > 0) {
+      const range = btcPrice * 0.05; // 5% range
+      setChartScale({
+        min: btcPrice - range,
+        max: btcPrice + range,
+        points: 100
+      });
+    }
+  }, [btcPrice]);
 
   if (loading) {
     return (
@@ -419,7 +672,7 @@ export const SimplePnLChart: React.FC<SimplePnLChartProps> = ({
   }
 
   return (
-    <div className="bg-white rounded-lg shadow-sm border">
+    <div className="bg-white rounded-lg shadow-sm border" ref={containerRef}>
       {/* Header */}
       <div className="p-4 border-b border-gray-200">
         <div className="flex items-center justify-between">
@@ -432,21 +685,33 @@ export const SimplePnLChart: React.FC<SimplePnLChartProps> = ({
             </p>
           </div>
           
-          {/* Current BTC Price & Connection Status */}
-          <div className="text-right text-sm">
-            <div className="font-medium text-gray-900">
-              BTC: ${btcPrice.toLocaleString(undefined, { minimumFractionDigits: 2 })}
-            </div>
-            <div className="flex items-center justify-end space-x-2">
-              <div className={`w-2 h-2 rounded-full ${
-                connected ? 'bg-green-500' : 'bg-red-500'
-              }`}></div>
-              <div className="text-gray-600">
-                {connected ? 'Live' : 'Disconnected'}
+          {/* Chart Controls */}
+          <div className="flex items-center space-x-2">
+            {zoomLevel !== 1 && (
+              <button
+                onClick={resetZoom}
+                className="px-3 py-1 text-xs bg-blue-100 text-blue-700 rounded hover:bg-blue-200 transition-colors"
+              >
+                Reset Zoom
+              </button>
+            )}
+            
+            {/* Current BTC Price & Connection Status */}
+            <div className="text-right text-sm">
+              <div className="font-medium text-gray-900">
+                BTC: ${btcPrice.toLocaleString(undefined, { minimumFractionDigits: 2 })}
               </div>
-            </div>
-            <div className="text-gray-600">
-              X-axis: BTC Price, Y-axis: P&L
+              <div className="flex items-center justify-end space-x-2">
+                <div className={`w-2 h-2 rounded-full ${
+                  connected ? 'bg-green-500' : 'bg-red-500'
+                }`}></div>
+                <div className="text-gray-600">
+                  {connected ? 'Live' : 'Disconnected'}
+                </div>
+              </div>
+              <div className="text-gray-600">
+                X-axis: BTC Price, Y-axis: P&L
+              </div>
             </div>
           </div>
         </div>
@@ -471,10 +736,36 @@ export const SimplePnLChart: React.FC<SimplePnLChartProps> = ({
           <div className="relative">
             <canvas
               ref={canvasRef}
-              className="w-full h-96 rounded-lg border border-gray-200"
+              className="w-full h-96 rounded-lg border border-gray-200 cursor-crosshair"
               style={{ height: '400px' }}
+              onMouseMove={handleMouseMove}
+              onMouseLeave={handleMouseLeave}
+              onMouseDown={handleMouseDown}
+              onMouseUp={handleMouseUp}
+              onWheel={handleWheel}
+              onClick={handleClick}
             />
             
+            {/* Interactive Tooltip */}
+            {tooltip.isVisible && (
+              <div 
+                className="absolute bg-gray-900 text-white p-2 rounded shadow-lg text-xs pointer-events-none z-10"
+                style={{
+                  left: tooltip.x + 10,
+                  top: tooltip.y - 40,
+                  transform: tooltip.x > 300 ? 'translateX(-100%)' : 'translateX(0)'
+                }}
+              >
+                <div className="font-medium">BTC Price: ${tooltip.price.toLocaleString()}</div>
+                <div className={`font-semibold ${tooltip.pnl >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                  P&L: {formatPnl(tooltip.pnl)}
+                </div>
+                <div className="text-gray-300 text-xs">
+                  {hoveredPoint && `ROI: ${((tooltip.pnl / Math.max(...positions.map(p => p.entryPrice * p.quantity))) * 100).toFixed(2)}%`}
+                </div>
+              </div>
+            )}
+
             {/* Interactive overlay for current P&L at BTC price */}
             {btcPrice > 0 && (
               <div className="absolute top-4 right-4 bg-white bg-opacity-90 backdrop-blur-sm rounded-lg p-3 shadow-lg border">
@@ -496,6 +787,14 @@ export const SimplePnLChart: React.FC<SimplePnLChartProps> = ({
                 </div>
               </div>
             )}
+
+            {/* Interaction Instructions */}
+            <div className="absolute bottom-4 left-4 bg-white bg-opacity-80 backdrop-blur-sm rounded p-2 text-xs text-gray-600">
+              <div>🖱️ Hover: View P&L at price</div>
+              <div>🖱️ Click: Explore breakeven points</div>
+              <div>🔍 Scroll: Zoom in/out</div>
+              {zoomLevel !== 1 && <div>📊 Current zoom: {zoomLevel.toFixed(1)}x</div>}
+            </div>
           </div>
         )}
       </div>
@@ -540,11 +839,11 @@ export const SimplePnLChart: React.FC<SimplePnLChartProps> = ({
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
             <div>
               <span className="text-gray-600">Total Positions:</span>
-              <span className="ml-1 font-medium text-gray-900">{portfolioSummary.totalPositions}</span>
+              <span className="ml-1 text-lg font-semibold text-gray-900">{portfolioSummary.totalPositions}</span>
             </div>
             <div>
               <span className="text-gray-600">Unrealized P&L:</span>
-              <span className={`ml-1 font-medium ${
+              <span className={`ml-1 text-lg font-semibold ${
                 portfolioSummary.totalUnrealizedPnl >= 0 ? 'text-green-600' : 'text-red-600'
               }`}>
                 {formatPnl(portfolioSummary.totalUnrealizedPnl)}
@@ -552,13 +851,13 @@ export const SimplePnLChart: React.FC<SimplePnLChartProps> = ({
             </div>
             <div>
               <span className="text-gray-600">Required Margin:</span>
-              <span className="ml-1 font-medium text-gray-900">
+              <span className="ml-1 text-lg font-semibold text-gray-900">
                 {formatPnl(portfolioSummary.totalMargin)}
               </span>
             </div>
             <div>
               <span className="text-gray-600">Position Mix:</span>
-              <span className="ml-1 font-medium text-gray-900">
+              <span className="ml-1 text-lg font-semibold text-gray-900">
                 {portfolioSummary.longPositions}L / {portfolioSummary.shortPositions}S
               </span>
             </div>
@@ -614,6 +913,7 @@ export const SimplePnLChart: React.FC<SimplePnLChartProps> = ({
           
           <div className="text-xs text-gray-600 mt-4 pt-3 border-t border-gray-200">
             <p><strong>How to read this chart:</strong> The X-axis shows BTC price levels, the Y-axis shows your portfolio P&L at each price. The curve shows how your positions would perform if BTC reaches different price levels. Red dots mark breakeven points where P&L = $0. The orange vertical line shows the current BTC price, and the orange dot shows your current P&L. Option prices are updated in real-time via WebSocket when connected.</p>
+            <p className="mt-2"><strong>Interactive Features:</strong> Hover over the chart to see exact P&L values at any price point. Click on breakeven points for detailed analysis. Use mouse wheel to zoom in/out for different price ranges. The blue highlight shows your current hover position.</p>
           </div>
         </div>
       )}

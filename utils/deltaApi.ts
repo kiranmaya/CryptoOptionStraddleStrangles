@@ -171,112 +171,46 @@ const fetchWithRetry = async (url: string, options: RequestInit = {}) => {
 
 export const fetchOptionChainData = async (settlementTime: string): Promise<OptionChainData> => {
   try {
-    const baseUrl = 'https://api.india.delta.exchange/v2';
     const params = new URLSearchParams({
-      contract_types: 'call_options,put_options',
-      underlying_asset: 'BTC'
+      settlementTime,
+      underlyingAsset: 'BTC'
     });
     
-    const response = await fetchWithRetry(`${baseUrl}/products?${params}`);
-    const data: DeltaApiResponse = await response.json();
+    const response = await fetch(`/api/option-chain?${params}`);
     
-    // Check if the API response indicates success
-    if (!data.success) {
-      throw new Error('API request failed');
+    if (!response.ok) {
+      const errorData = await response.json();
+      throw new Error(errorData.error || 'Failed to fetch option chain data');
     }
     
-    // Filter products by settlement date and underlying asset, then map to OptionContract interface
-    const selectedDate = settlementTime.split('T')[0]; // Get just the date part
-    const filteredProducts = data.result
-      .filter((product: DeltaApiProduct) => {
-        // Filter by underlying asset (BTC) and settlement date
-        return product.underlying_asset.symbol === 'BTC' &&
-               product.settlement_time.startsWith(selectedDate);
-      })
-      .map((product: DeltaApiProduct) => ({
-        symbol: product.symbol,
-        contract_type: product.contract_type as 'call_options' | 'put_options',
-        strike_price: product.strike_price,
-        settlement_time: product.settlement_time,
-        underlying_asset: product.underlying_asset.symbol,
-        expiry_date: product.expiry_date || product.settlement_time.split('T')[0],
-        settlement_date: product.settlement_time.split('T')[0],
-        mark_price: product.mark_price,
-        bid_price: product.bid_price,
-        ask_price: product.ask_price,
-        volume: product.volume_24h ? Number(product.volume_24h) : undefined,
-        open_interest: product.open_interest_24h ? Number(product.open_interest_24h) : undefined
-      }));
-    
-    // Separate calls and puts
-    const calls = filteredProducts
-      .filter(product => product.contract_type === 'call_options')
-      .sort((a, b) => parseFloat(a.strike_price) - parseFloat(b.strike_price));
-    
-    const puts = filteredProducts
-      .filter(product => product.contract_type === 'put_options')
-      .sort((a, b) => parseFloat(a.strike_price) - parseFloat(b.strike_price));
-    
-    return { calls, puts };
+    const data: OptionChainData = await response.json();
+    return data;
   } catch (err) {
     console.error('Error fetching option chain data:', err);
-    throw err; // Re-throw to show real error instead of falling back to mock data
+    throw err;
   }
 };
 
 
 export const fetchOptionChainDataByAsset = async (settlementTime: string, underlyingAsset: string = 'BTC'): Promise<OptionChainData> => {
   try {
-    const baseUrl = 'https://api.india.delta.exchange/v2';
     const params = new URLSearchParams({
-      contract_types: 'call_options,put_options',
-      underlying_asset: underlyingAsset
+      settlementTime,
+      underlyingAsset
     });
     
-    const response = await fetchWithRetry(`${baseUrl}/products?${params}`);
-    const data: DeltaApiResponse = await response.json();
+    const response = await fetch(`/api/option-chain?${params}`);
     
-    // Check if the API response indicates success
-    if (!data.success) {
-      throw new Error('API request failed');
+    if (!response.ok) {
+      const errorData = await response.json();
+      throw new Error(errorData.error || 'Failed to fetch option chain data');
     }
     
-    // Filter products by settlement date and underlying asset, then map to OptionContract interface
-    const selectedDate = settlementTime.split('T')[0]; // Get just the date part
-    const filteredProducts = data.result
-      .filter((product: DeltaApiProduct) => {
-        // Filter by underlying asset and settlement date
-        return product.underlying_asset.symbol === underlyingAsset &&
-               product.settlement_time.startsWith(selectedDate);
-      })
-      .map((product: DeltaApiProduct) => ({
-        symbol: product.symbol,
-        contract_type: product.contract_type as 'call_options' | 'put_options',
-        strike_price: product.strike_price,
-        settlement_time: product.settlement_time,
-        underlying_asset: product.underlying_asset.symbol,
-        expiry_date: product.expiry_date || product.settlement_time.split('T')[0],
-        settlement_date: product.settlement_time.split('T')[0],
-        mark_price: product.mark_price,
-        bid_price: product.bid_price,
-        ask_price: product.ask_price,
-        volume: product.volume_24h ? Number(product.volume_24h) : undefined,
-        open_interest: product.open_interest_24h ? Number(product.open_interest_24h) : undefined
-      }));
-    
-    // Separate calls and puts
-    const calls = filteredProducts
-      .filter(product => product.contract_type === 'call_options')
-      .sort((a, b) => parseFloat(a.strike_price) - parseFloat(b.strike_price));
-    
-    const puts = filteredProducts
-      .filter(product => product.contract_type === 'put_options')
-      .sort((a, b) => parseFloat(a.strike_price) - parseFloat(b.strike_price));
-    
-    return { calls, puts };
+    const data: OptionChainData = await response.json();
+    return data;
   } catch (err) {
     console.error('Error fetching option chain data:', err);
-    throw err; // Re-throw to show real error instead of falling back to mock data
+    throw err;
   }
 };
 
@@ -369,17 +303,18 @@ export const fetchCandlestickData = async (
 
 export const fetchBTCPrice = async (): Promise<number> => {
   try {
-    const response = await fetchWithRetry('https://api.india.delta.exchange/v2/tickers/BTCUSD');
-    const data = await response.json();
+    const response = await fetch('/api/btc-price');
     
-    if (data.success) {
-      return parseFloat(data.result.mark_price);
+    if (!response.ok) {
+      const errorData = await response.json();
+      throw new Error(errorData.error || 'Failed to fetch BTC price');
     }
     
-    throw new Error('Invalid response');
+    const data = await response.json();
+    return data.price;
   } catch (err) {
     console.error('Error fetching BTC price:', err);
-    throw err; // Re-throw to show real error instead of falling back to mock data
+    throw err;
   }
 };
 
@@ -392,21 +327,20 @@ export const fetchOptionTicker = async (symbol: string): Promise<{
   volume_24h: string;
 } | null> => {
   try {
-    const response = await fetchWithRetry(`https://api.india.delta.exchange/v2/tickers/${symbol}`);
-    const data = await response.json();
+    const params = new URLSearchParams({ symbol });
+    const response = await fetch(`/api/option-ticker?${params}`);
     
-    if (data.success && data.result) {
-      return {
-        mark_price: data.result.mark_price,
-        bid_price: data.result.bid_price,
-        ask_price: data.result.ask_price,
-        change_24h: data.result.change_24h,
-        volume_24h: data.result.volume_24h
-      };
+    if (!response.ok) {
+      if (response.status === 404) {
+        console.warn(`No ticker data found for symbol: ${symbol}`);
+        return null;
+      }
+      const errorData = await response.json();
+      throw new Error(errorData.error || 'Failed to fetch option ticker data');
     }
     
-    console.warn(`No ticker data found for symbol: ${symbol}`);
-    return null;
+    const data = await response.json();
+    return data;
   } catch (err) {
     console.error(`Error fetching ticker for ${symbol}:`, err);
     return null;

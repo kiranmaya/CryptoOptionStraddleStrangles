@@ -38,6 +38,37 @@ interface CombinedChartProps {
   onCalculationChange: (method: CalculationMethod) => void;
 }
 
+// Interactive tooltip interface
+interface HoverData {
+  time: number;
+  dateTime: string;
+  optionsData?: {
+    open: number;
+    high: number;
+    low: number;
+    close: number;
+    change: number;
+    changePercent: number;
+  };
+  btcData?: {
+    open: number;
+    high: number;
+    low: number;
+    close: number;
+    change: number;
+    changePercent: number;
+  };
+  optionsCci?: number;
+  btcCci?: number;
+}
+
+interface TooltipState {
+  isVisible: boolean;
+  x: number;
+  y: number;
+  data: HoverData | null;
+}
+
 // CCI Data interface
 interface CCIData {
   time: number;
@@ -144,6 +175,15 @@ export const CombinedCandleSticksChart: React.FC<CombinedChartProps> = ({
   const [btcPriceChange, setBtcPriceChange] = useState<number>(0);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [containerElement, setContainerElement] = useState<HTMLDivElement | null>(null);
+  
+  // Interactive tooltip state
+  const [tooltip, setTooltip] = useState<TooltipState>({
+    isVisible: false,
+    x: 0,
+    y: 0,
+    data: null
+  });
+  const [hoveredTime, setHoveredTime] = useState<number | null>(null);
 
   const { connected, subscribeCandlesticks, subscribeMarkPrices, onMessage, offMessage } = useDeltaWebSocket();
 
@@ -238,7 +278,6 @@ export const CombinedCandleSticksChart: React.FC<CombinedChartProps> = ({
         mode: CrosshairMode.Normal,
         // Vertical crosshair line (showing Date in Label)
         vertLine: {
-         
           color: '#C3BCDB44',
           labelBackgroundColor: '#9B7DFF',
         },
@@ -301,6 +340,96 @@ export const CombinedCandleSticksChart: React.FC<CombinedChartProps> = ({
     optionsCciSeriesRef.current = optionsCciSeries;
     btcSeriesRef.current = btcSeries;
     btcCciSeriesRef.current = btcCciSeries;
+
+    // Set up crosshair move handler for interactive tooltip
+    chart.subscribeCrosshairMove((param) => {
+      // Check if cursor is outside chart bounds
+      if (
+        param.point === undefined ||
+        !param.time ||
+        param.point.x < 0 ||
+        param.point.y < 0 ||
+        param.point.x > container.clientWidth ||
+        param.point.y > container.clientHeight
+      ) {
+        setTooltip({
+          isVisible: false,
+          x: 0,
+          y: 0,
+          data: null
+        });
+        setHoveredTime(null);
+        return;
+      }
+
+      const time = param.time as UTCTimestamp;
+      const date = new Date(time * 1000);
+      
+      // Find data for all series at the hovered time
+      const optionsCandle = chartData.find(c => c.time === time);
+      const btcCandle = btcData.find(c => c.time === time);
+      const optionsCciPoint = optionsCciData.find(c => c.time === time);
+      const btcCciPoint = btcCciData.find(c => c.time === time);
+      
+      // Prepare hover data
+      const hoverData: HoverData = {
+        time: time,
+        dateTime: date.toLocaleString(),
+      };
+      
+      // Add options data if available
+      if (optionsCandle) {
+        const prevCandle = chartData.find(c => c.time === time - (parseInt(resolution) * 60));
+        const change = prevCandle ? optionsCandle.close - prevCandle.close : 0;
+        const changePercent = prevCandle ? (change / prevCandle.close) * 100 : 0;
+        
+        hoverData.optionsData = {
+          open: optionsCandle.open,
+          high: optionsCandle.high,
+          low: optionsCandle.low,
+          close: optionsCandle.close,
+          change: change,
+          changePercent: changePercent
+        };
+      }
+      
+      // Add BTC data if available
+      if (btcCandle) {
+        const prevBtc = btcData.find(c => c.time === time - (parseInt(resolution) * 60));
+        const change = prevBtc ? btcCandle.close - prevBtc.close : 0;
+        const changePercent = prevBtc ? (change / prevBtc.close) * 100 : 0;
+        
+        hoverData.btcData = {
+          open: btcCandle.open,
+          high: btcCandle.high,
+          low: btcCandle.low,
+          close: btcCandle.close,
+          change: change,
+          changePercent: changePercent
+        };
+      }
+      
+      // Add CCI data if available
+      if (optionsCciPoint) {
+        hoverData.optionsCci = optionsCciPoint.value;
+      }
+      
+      if (btcCciPoint) {
+        hoverData.btcCci = btcCciPoint.value;
+      }
+      
+      // Show tooltip if we have any data
+      const hasData = Boolean(optionsCandle || btcCandle || optionsCciPoint || btcCciPoint);
+      
+      setTooltip({
+        isVisible: hasData,
+        x: param.point.x,
+        y: param.point.y,
+        data: hasData ? hoverData : null
+      });
+      
+      setHoveredTime(hasData ? time : null);
+    });
 
     // Set pane heights for 4 panes using stretch factors (following lightweight-charts example)
     const initializePanes = () => {
@@ -1139,6 +1268,248 @@ export const CombinedCandleSticksChart: React.FC<CombinedChartProps> = ({
                   <option value="30">30m</option>
                 </select>
               </div>
+            </div>
+            
+            {/* Tracking Tooltip - Follows user's cursor */}
+            {tooltip.isVisible && tooltip.data && containerElement && (() => {
+              const tooltipWidth = 280;
+              const tooltipHeight = 200;
+              const tooltipMargin = 15;
+              
+              // Calculate position following the user's cursor (like in the examples)
+              let left = tooltip.x + tooltipMargin;
+              if (left > containerElement.clientWidth - tooltipWidth) {
+                left = tooltip.x - tooltipMargin - tooltipWidth;
+              }
+              
+              let top = tooltip.y + tooltipMargin;
+              if (top > containerElement.clientHeight - tooltipHeight) {
+                top = tooltip.y - tooltipHeight - tooltipMargin;
+              }
+              
+              // Ensure tooltip stays within container bounds
+              left = Math.max(0, Math.min(containerElement.clientWidth - tooltipWidth, left));
+              top = Math.max(0, Math.min(containerElement.clientHeight - tooltipHeight, top));
+              
+              return (
+                <div
+                  className="absolute bg-white border border-gray-300 rounded-lg shadow-xl text-xs pointer-events-none z-20 max-w-sm font-mono"
+                  style={{
+                    left: left + 'px',
+                    top: top + 'px',
+                    width: tooltipWidth + 'px',
+                    boxShadow: '0 4px 12px rgba(0, 0, 0, 0.15)',
+                    backdropFilter: 'blur(4px)',
+                  }}
+                >
+                  {/* Header with date/time */}
+                  <div className="bg-gray-50 text-gray-900 font-semibold px-3 py-2 rounded-t-lg border-b border-gray-200">
+                    {tooltip.data.dateTime}
+                  </div>
+                  
+                  <div className="p-3 space-y-3">
+                    {/* Options Data */}
+                    {tooltip.data.optionsData && (
+                      <div className="border-b border-gray-100 pb-2">
+                        <div className="text-green-600 font-semibold text-xs mb-1 flex items-center">
+                          <div className="w-2 h-2 bg-green-500 rounded-full mr-2"></div>
+                          Combined Options
+                        </div>
+                        <div className="grid grid-cols-4 gap-1 text-xs">
+                          <div className="text-gray-600">O:</div>
+                          <div className="text-gray-900 font-mono">{tooltip.data.optionsData.open.toFixed(4)}</div>
+                          <div className="text-gray-600">H:</div>
+                          <div className="text-gray-900 font-mono">{tooltip.data.optionsData.high.toFixed(4)}</div>
+                          <div className="text-gray-600">L:</div>
+                          <div className="text-gray-900 font-mono">{tooltip.data.optionsData.low.toFixed(4)}</div>
+                          <div className="text-gray-600">C:</div>
+                          <div className={`font-mono font-semibold ${
+                            tooltip.data.optionsData.change >= 0 ? 'text-green-600' : 'text-red-600'
+                          }`}>
+                            {tooltip.data.optionsData.close.toFixed(4)}
+                          </div>
+                        </div>
+                        {tooltip.data.optionsData.changePercent !== 0 && (
+                          <div className={`text-xs mt-1 flex items-center ${
+                            tooltip.data.optionsData.change >= 0 ? 'text-green-600' : 'text-red-600'
+                          }`}>
+                            {tooltip.data.optionsData.change >= 0 ? '↗' : '↘'}
+                            <span className="ml-1 font-mono">
+                              {tooltip.data.optionsData.changePercent.toFixed(2)}%
+                            </span>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                    
+                    {/* BTC Data */}
+                    {tooltip.data.btcData && (
+                      <div className="border-b border-gray-100 pb-2">
+                        <div className="text-yellow-600 font-semibold text-xs mb-1 flex items-center">
+                          <div className="w-2 h-2 bg-yellow-500 rounded-full mr-2"></div>
+                          BTC Price
+                        </div>
+                        <div className="grid grid-cols-4 gap-1 text-xs">
+                          <div className="text-gray-600">O:</div>
+                          <div className="text-gray-900 font-mono">${tooltip.data.btcData.open.toLocaleString()}</div>
+                          <div className="text-gray-600">H:</div>
+                          <div className="text-gray-900 font-mono">${tooltip.data.btcData.high.toLocaleString()}</div>
+                          <div className="text-gray-600">L:</div>
+                          <div className="text-gray-900 font-mono">${tooltip.data.btcData.low.toLocaleString()}</div>
+                          <div className="text-gray-600">C:</div>
+                          <div className={`font-mono font-semibold ${
+                            tooltip.data.btcData.change >= 0 ? 'text-green-600' : 'text-red-600'
+                          }`}>
+                            ${tooltip.data.btcData.close.toLocaleString()}
+                          </div>
+                        </div>
+                        {tooltip.data.btcData.changePercent !== 0 && (
+                          <div className={`text-xs mt-1 flex items-center ${
+                            tooltip.data.btcData.change >= 0 ? 'text-green-600' : 'text-red-600'
+                          }`}>
+                            {tooltip.data.btcData.change >= 0 ? '↗' : '↘'}
+                            <span className="ml-1 font-mono">
+                              {tooltip.data.btcData.changePercent.toFixed(2)}%
+                            </span>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                    
+                    {/* CCI Data */}
+                    <div className="grid grid-cols-2 gap-3">
+                      {tooltip.data.optionsCci !== undefined && (
+                        <div>
+                          <div className="text-purple-600 font-semibold text-xs mb-1 flex items-center">
+                            <div className="w-2 h-2 bg-purple-500 rounded-full mr-2"></div>
+                            CCI1
+                          </div>
+                          <div className={`font-mono text-sm ${
+                            tooltip.data.optionsCci > 100
+                              ? 'text-red-600 font-bold'
+                              : tooltip.data.optionsCci < -100
+                                ? 'text-green-600 font-bold'
+                                : 'text-gray-700'
+                          }`}>
+                            {tooltip.data.optionsCci.toFixed(2)}
+                          </div>
+                        </div>
+                      )}
+                      {tooltip.data.btcCci !== undefined && (
+                        <div>
+                          <div className="text-orange-600 font-semibold text-xs mb-1 flex items-center">
+                            <div className="w-2 h-2 bg-orange-500 rounded-full mr-2"></div>
+                            CCI2
+                          </div>
+                          <div className={`font-mono text-sm ${
+                            tooltip.data.btcCci > 100
+                              ? 'text-red-600 font-bold'
+                              : tooltip.data.btcCci < -100
+                                ? 'text-green-600 font-bold'
+                                : 'text-gray-700'
+                          }`}>
+                            {tooltip.data.btcCci.toFixed(2)}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              );
+            })()}
+            
+            {/* Floating Tooltip - Positioned next to data point (like in lightweight-charts examples) */}
+            {tooltip.isVisible && tooltip.data && containerElement && (() => {
+              const floatingTooltipWidth = 200;
+              const floatingTooltipHeight = 120;
+              const floatingTooltipMargin = 20;
+              
+              // Position tooltip next to the data point (following floating tooltip example)
+              let left = tooltip.x - 50; // Shift left from cursor
+              left = Math.max(0, Math.min(containerElement.clientWidth - floatingTooltipWidth, left));
+              
+              // Position tooltip above/below the cursor based on available space
+              let top = tooltip.y - floatingTooltipHeight - floatingTooltipMargin;
+              if (top < 0) {
+                top = Math.min(containerElement.clientHeight - floatingTooltipHeight, tooltip.y + floatingTooltipMargin);
+              }
+              
+              return (
+                <div
+                  className="absolute bg-black bg-opacity-80 text-white p-2 rounded text-xs pointer-events-none z-20 font-mono"
+                  style={{
+                    left: left + 'px',
+                    top: top + 'px',
+                    width: floatingTooltipWidth + 'px',
+                    minHeight: floatingTooltipHeight + 'px',
+                  }}
+                >
+                  <div className="text-white font-semibold text-xs mb-1">
+                    {tooltip.data.dateTime.split(',')[0]} {/* Just the date part */}
+                  </div>
+                  
+                  <div className="space-y-1">
+                    {tooltip.data.optionsData && (
+                      <div className="text-green-300">
+                        <div className="text-xs">Options: {tooltip.data.optionsData.close.toFixed(4)}</div>
+                        <div className={`text-xs ${tooltip.data.optionsData.change >= 0 ? 'text-green-300' : 'text-red-300'}`}>
+                          {tooltip.data.optionsData.changePercent.toFixed(2)}%
+                        </div>
+                      </div>
+                    )}
+                    
+                    {tooltip.data.btcData && (
+                      <div className="text-yellow-300">
+                        <div className="text-xs">BTC: ${tooltip.data.btcData.close.toLocaleString()}</div>
+                        <div className={`text-xs ${tooltip.data.btcData.change >= 0 ? 'text-green-300' : 'text-red-300'}`}>
+                          {tooltip.data.btcData.changePercent.toFixed(2)}%
+                        </div>
+                      </div>
+                    )}
+                    
+                    <div className="text-gray-300 text-xs">
+                      {connected ? '🟢 Live' : '⚪ Historical'}
+                    </div>
+                  </div>
+                </div>
+              );
+            })()}
+            
+            {/* Live Data Summary Panel */}
+            {hoveredTime && tooltip.data && (
+              <div className="absolute top-4 right-4 bg-white bg-opacity-95 backdrop-blur-sm rounded-lg p-3 shadow-lg border z-10">
+                <div className="text-xs space-y-1">
+                  <div className="font-medium text-gray-900">
+                    Live Data Summary
+                  </div>
+                  {tooltip.data.optionsData && (
+                    <div className="text-blue-600">
+                      Options: {tooltip.data.optionsData.close.toFixed(4)}
+                      <span className={`ml-1 ${tooltip.data.optionsData.change >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                        ({tooltip.data.optionsData.changePercent.toFixed(2)}%)
+                      </span>
+                    </div>
+                  )}
+                  {tooltip.data.btcData && (
+                    <div className="text-yellow-600">
+                      BTC: ${tooltip.data.btcData.close.toLocaleString()}
+                      <span className={`ml-1 ${tooltip.data.btcData.change >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                        ({tooltip.data.btcData.changePercent.toFixed(2)}%)
+                      </span>
+                    </div>
+                  )}
+                  <div className="text-gray-600 text-xs">
+                    {connected ? 'Live data' : 'Historical data'}
+                  </div>
+                </div>
+              </div>
+            )}
+            
+            {/* Interactive Instructions */}
+            <div className="absolute bottom-4 left-4 bg-white bg-opacity-80 backdrop-blur-sm rounded p-2 text-xs text-gray-600 z-10">
+              <div>🖱️ Hover: View all series data</div>
+              <div>📊 Crosshair: Real-time values</div>
+              <div>📈 4 panes: Options | CCI1 | BTC | CCI2</div>
             </div>
           </div>
         )}

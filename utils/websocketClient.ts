@@ -17,8 +17,13 @@ export interface CandlestickUpdate {
 
 export interface PriceUpdate {
   symbol: string;
-  price: number;
+  price?: number;
+  bid?: number;
+  ask?: number;
+  mark?: number;
+  last_price?: number;
   timestamp: number;
+  raw?: unknown;
 }
 
 type MessageHandler = (data: unknown) => void;
@@ -135,8 +140,24 @@ class DeltaWebSocketClient {
   private resubscribeSymbols(): void {
     if (this.subscribedSymbols.size > 0) {
       const symbols = Array.from(this.subscribedSymbols);
+      
+      // Separate regular symbols (for v2/ticker) from MARK: symbols (for mark_price)
+      const tickerSymbols = symbols.filter(symbol => !symbol.startsWith('MARK:'));
+      const markPriceSymbols = symbols.filter(symbol => symbol.startsWith('MARK:'));
+      
+      console.log('🔄 Resubscribing to symbols:');
+      console.log('  ticker:', tickerSymbols);
+      console.log('  mark_price:', markPriceSymbols);
+      
+      if (tickerSymbols.length > 0) {
+        this.subscribeTickers(tickerSymbols);
+      }
+      
+      if (markPriceSymbols.length > 0) {
+        this.subscribeMarkPrices(markPriceSymbols);
+      }
+      
       this.subscribeCandlesticks(symbols);
-      this.subscribeTickers(symbols);
     }
   }
 
@@ -157,6 +178,9 @@ class DeltaWebSocketClient {
         break;
       case 'v2/ticker':
         this.handleTickerUpdate(message);
+        break;
+      case 'mark_price':
+        this.handleMarkPriceUpdate(message);
         break;
       case 'subscription':
         console.log('Subscription confirmed:', message.payload);
@@ -182,6 +206,61 @@ class DeltaWebSocketClient {
     // Notify registered handlers for specific message types
     const handlers = this.messageHandlers.get(message.type) || [];
     handlers.forEach(handler => handler(message.payload));
+  }
+
+  private handleMarkPriceUpdate(message: WebSocketMessage): void {
+    if (!message.payload) return;
+    
+    // Handle mark price updates
+    const payload = message.payload as Record<string, unknown>;
+    
+    console.log('🎯 Mark price update received:', payload);
+    
+    // Mark price format is similar to ticker but for MARK: prefixed symbols
+    const symbol = String(payload.symbol || '');
+    if (!symbol) {
+      console.log('❌ No symbol in mark price payload:', payload);
+      return;
+    }
+    
+    // Extract prices with multiple possible field names
+    const bid_price = payload.bid_price !== undefined ? Number(payload.bid_price) :
+                     (payload.bid !== undefined ? Number(payload.bid) : 0);
+    const ask_price = payload.ask_price !== undefined ? Number(payload.ask_price) :
+                     (payload.ask !== undefined ? Number(payload.ask) : 0);
+    const mark_price = payload.mark_price !== undefined ? Number(payload.mark_price) :
+                      (payload.mark !== undefined ? Number(payload.mark) : 0);
+    const last_price = payload.last_price !== undefined ? Number(payload.last_price) :
+                      (payload.price !== undefined ? Number(payload.price) : 0);
+    const close_price = payload.close !== undefined ? Number(payload.close) : 0;
+    
+    // Create comprehensive price update
+    const priceUpdate: PriceUpdate = {
+      symbol,
+      bid: bid_price,
+      ask: ask_price,
+      mark: mark_price || last_price || close_price,
+      last_price: last_price || close_price,
+      price: last_price || close_price,
+      timestamp: Date.now(),
+      raw: payload
+    };
+    
+    console.log(`💰 Processed mark price for ${symbol}:`, {
+      bid: bid_price.toFixed(4),
+      ask: ask_price.toFixed(4),
+      mark: (mark_price || last_price || close_price).toFixed(4)
+    });
+    
+    // Notify handlers for different message types
+    const markPriceHandlers = this.messageHandlers.get('mark_price') || [];
+    markPriceHandlers.forEach(handler => handler(priceUpdate));
+    
+    const tickerHandlers = this.messageHandlers.get('ticker') || [];
+    tickerHandlers.forEach(handler => handler(priceUpdate));
+    
+    const priceHandlers = this.messageHandlers.get('price') || [];
+    priceHandlers.forEach(handler => handler(priceUpdate));
   }
 
   private handleCandlestickUpdate(message: WebSocketMessage): void {
@@ -215,29 +294,56 @@ class DeltaWebSocketClient {
     // Handle different ticker payload structures
     const payload = message.payload as Record<string, unknown>;
     
-    // Delta Exchange ticker format
-    if (payload.symbol && payload.last_price) {
-      const symbol = String(payload.symbol);
-      const price = Number(payload.last_price);
-      
-      const update: PriceUpdate = {
-        symbol,
-        price,
-        timestamp: Date.now()
-      };
-      
-      // Notify ticker handlers
-      const handlers = this.messageHandlers.get('ticker') || [];
-      handlers.forEach(handler => handler(update));
-      
-      // Also notify mark_price handlers for backward compatibility
-      const markPriceHandlers = this.messageHandlers.get('mark_price') || [];
-      markPriceHandlers.forEach(handler => handler(update));
-      
-      // Notify ticker handlers for v2/ticker channel
-      const tickerHandlers = this.messageHandlers.get('ticker') || [];
-      tickerHandlers.forEach(handler => handler(update));
+    console.log('🎯 Ticker update received:', payload);
+    
+    // Delta Exchange v2/ticker format - handle multiple possible field names
+    const symbol = String(payload.symbol || '');
+    if (!symbol) {
+      console.log('❌ No symbol in ticker payload:', payload);
+      return;
     }
+    
+    // Extract prices with multiple possible field names
+    const bid_price = payload.bid_price !== undefined ? Number(payload.bid_price) :
+                     (payload.bid !== undefined ? Number(payload.bid) : 0);
+    const ask_price = payload.ask_price !== undefined ? Number(payload.ask_price) :
+                     (payload.ask !== undefined ? Number(payload.ask) : 0);
+    const mark_price = payload.mark_price !== undefined ? Number(payload.mark_price) :
+                      (payload.mark !== undefined ? Number(payload.mark) : 0);
+    const last_price = payload.last_price !== undefined ? Number(payload.last_price) :
+                      (payload.price !== undefined ? Number(payload.price) : 0);
+    const close_price = payload.close !== undefined ? Number(payload.close) : 0;
+    
+    // Create comprehensive price update
+    const priceUpdate: PriceUpdate = {
+      symbol,
+      bid: bid_price,
+      ask: ask_price,
+      mark: mark_price || last_price || close_price,
+      last_price: last_price || close_price,
+      price: last_price || close_price,
+      timestamp: Date.now(),
+      raw: payload
+    };
+    
+    console.log(`💰 Processed price for ${symbol}:`, {
+      bid: bid_price.toFixed(4),
+      ask: ask_price.toFixed(4),
+      mark: (mark_price || last_price || close_price).toFixed(4)
+    });
+    
+    // Notify handlers for different message types
+    const tickerHandlers = this.messageHandlers.get('ticker') || [];
+    tickerHandlers.forEach(handler => handler(priceUpdate));
+    
+    const v2TickerHandlers = this.messageHandlers.get('v2/ticker') || [];
+    v2TickerHandlers.forEach(handler => handler(priceUpdate));
+    
+    const markPriceHandlers = this.messageHandlers.get('mark_price') || [];
+    markPriceHandlers.forEach(handler => handler(priceUpdate));
+    
+    const priceHandlers = this.messageHandlers.get('price') || [];
+    priceHandlers.forEach(handler => handler(priceUpdate));
   }
 
   private handlePriceUpdate(message: WebSocketMessage): void {
@@ -293,8 +399,15 @@ class DeltaWebSocketClient {
   }
 
   public subscribeTickers(symbols: string[]): void {
-    console.log('Subscribing to ticker symbols:', symbols);
-    this.send({
+    if (symbols.length === 0) {
+      console.log('⚠️ No symbols provided for ticker subscription');
+      return;
+    }
+    
+    console.log('📡 Subscribing to ticker symbols:', symbols);
+    console.log('🔗 WebSocket connection status:', this.ws?.readyState, this.ws?.OPEN);
+    
+    const subscriptionMessage = {
       type: 'subscribe',
       payload: {
         channels: [{
@@ -302,7 +415,14 @@ class DeltaWebSocketClient {
           symbols: symbols
         }]
       }
-    });
+    };
+    
+    console.log('📤 Sending subscription message:', JSON.stringify(subscriptionMessage, null, 2));
+    
+    this.send(subscriptionMessage);
+    
+    // Add these symbols to our tracked subscriptions
+    symbols.forEach(symbol => this.subscribedSymbols.add(symbol));
   }
 
   public authenticate(apiKey: string, apiSecret: string): void {
