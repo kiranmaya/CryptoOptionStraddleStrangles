@@ -1,5 +1,6 @@
 // Chart helpers for straddle/strangle calculations
 
+import { Selection } from '../components/OptionChainTable';
 import { CandlestickData } from './deltaApi';
 
 export interface CombinedCandleData {
@@ -383,6 +384,222 @@ export class ChartDataCache {
     return this.cache.size;
   }
 }
+
+// P&L Strategy Builder Types and Utilities
+
+export interface PnLDataPoint {
+  price: number;
+  pnl: number;
+  label?: string;
+}
+
+export interface StrategyInfo {
+  name: string;
+  type: 'long_straddle' | 'short_straddle' | 'long_strangle' | 'short_strangle' | 'iron_condor' | 'butterfly' | 'custom';
+  description: string;
+  isLong: boolean;
+  maxProfit: number | 'unlimited';
+  maxLoss: number | 'unlimited';
+  breakevenPoints: number[];
+}
+
+// Calculate theoretical P&L for different option strategies
+export const calculatePnL = (
+  underlyingPrice: number,
+  optionType: 'call' | 'put',
+  strike: number,
+  premium: number,
+  position: 'long' | 'short',
+  quantity: number = 1
+): number => {
+  let intrinsicValue = 0;
+  
+  if (optionType === 'call') {
+    intrinsicValue = Math.max(0, underlyingPrice - strike);
+  } else {
+    intrinsicValue = Math.max(0, strike - underlyingPrice);
+  }
+  
+  const optionPayoff = position === 'long'
+    ? intrinsicValue - premium
+    : premium - intrinsicValue;
+  
+  return optionPayoff * quantity;
+};
+
+// Generate P&L curve data for a strategy
+export const generatePnLCurve = (
+  selections: Selection[],
+  priceRange: { min: number; max: number; points: number },
+  currentPrice: number
+): PnLDataPoint[] => {
+  const { min, max, points } = priceRange;
+  const priceStep = (max - min) / (points - 1);
+  const pnlData: PnLDataPoint[] = [];
+  
+  // Separate calls and puts from selections
+  const calls = selections.filter(s => s.type === 'call');
+  const puts = selections.filter(s => s.type === 'put');
+  
+  // Use current price as premium if not available
+  const getPremium = (selection: Selection): number => {
+    if (selection.price && !isNaN(parseFloat(selection.price))) {
+      return parseFloat(selection.price);
+    }
+    return currentPrice * 0.02; // Estimate 2% of current price as premium
+  };
+  
+  for (let i = 0; i < points; i++) {
+    const price = min + (priceStep * i);
+    let totalPnL = 0;
+    
+    // Calculate P&L for each selected option
+    selections.forEach(selection => {
+      const premium = getPremium(selection);
+      const isLong = true; // Current implementation assumes long positions
+      const optionPnL = calculatePnL(
+        price,
+        selection.type,
+        selection.strike,
+        premium,
+        isLong ? 'long' : 'short',
+        1
+      );
+      totalPnL += optionPnL;
+    });
+    
+    pnlData.push({
+      price,
+      pnl: totalPnL,
+      label: price === currentPrice ? 'Current Price' : undefined
+    });
+  }
+  
+  return pnlData;
+};
+
+// Detect strategy type based on selected options
+export const detectStrategy = (selections: Selection[]): StrategyInfo => {
+  const calls = selections.filter(s => s.type === 'call');
+  const puts = selections.filter(s => s.type === 'put');
+  
+  if (selections.length === 0) {
+    return {
+      name: 'No Strategy',
+      type: 'custom',
+      description: 'No options selected',
+      isLong: true,
+      maxProfit: 0,
+      maxLoss: 0,
+      breakevenPoints: []
+    };
+  }
+  
+  if (calls.length === 1 && puts.length === 1) {
+    const callStrike = calls[0].strike;
+    const putStrike = puts[0].strike;
+    
+    if (callStrike === putStrike) {
+      return {
+        name: 'Long Straddle',
+        type: 'long_straddle',
+        description: 'Buy call and put at same strike (ATM)',
+        isLong: true,
+        maxProfit: 'unlimited',
+        maxLoss: callStrike + putStrike, // Premium paid
+        breakevenPoints: [callStrike - callStrike, callStrike + callStrike]
+      };
+    } else {
+      return {
+        name: 'Long Strangle',
+        type: 'long_strangle',
+        description: 'Buy call and put at different strikes (OTM)',
+        isLong: true,
+        maxProfit: 'unlimited',
+        maxLoss: (callStrike - Math.min(callStrike, putStrike)) + (Math.max(callStrike, putStrike) - putStrike),
+        breakevenPoints: []
+      };
+    }
+  }
+  
+  if (calls.length === 2 && puts.length === 0) {
+    return {
+      name: 'Bull Call Spread',
+      type: 'butterfly',
+      description: 'Buy lower strike call, sell higher strike call',
+      isLong: true,
+      maxProfit: calls[1].strike - calls[0].strike,
+      maxLoss: calls[0].strike,
+      breakevenPoints: []
+    };
+  }
+  
+  if (calls.length === 0 && puts.length === 2) {
+    return {
+      name: 'Bear Put Spread',
+      type: 'butterfly',
+      description: 'Buy higher strike put, sell lower strike put',
+      isLong: true,
+      maxProfit: puts[0].strike - puts[1].strike,
+      maxLoss: puts[1].strike,
+      breakevenPoints: []
+    };
+  }
+  
+  return {
+    name: 'Custom Strategy',
+    type: 'custom',
+    description: `${calls.length} calls + ${puts.length} puts`,
+    isLong: true,
+    maxProfit: 'unlimited',
+    maxLoss: 'unlimited',
+    breakevenPoints: []
+  };
+};
+
+// Calculate price range for P&L chart
+export const calculatePriceRange = (
+  selections: Selection[],
+  currentPrice: number,
+  volatility: number = 0.3
+): { min: number; max: number; points: number } => {
+  if (selections.length === 0) {
+    return {
+      min: currentPrice * 0.7,
+      max: currentPrice * 1.3,
+      points: 100
+    };
+  }
+  
+  // Get all strikes
+  const strikes = selections.map(s => s.strike);
+  const minStrike = Math.min(...strikes);
+  const maxStrike = Math.max(...strikes);
+  
+  // Add buffer based on volatility
+  const buffer = currentPrice * volatility;
+  
+  return {
+    min: Math.max(minStrike - buffer, currentPrice * 0.5),
+    max: maxStrike + buffer,
+    points: 200
+  };
+};
+
+// Get strategy color based on P&L
+export const getStrategyColor = (pnl: number, isProfitZone: boolean): string => {
+  if (pnl > 0) return '#10b981'; // Green for profit
+  if (pnl < 0) return '#ef4444'; // Red for loss
+  return isProfitZone ? '#10b981' : '#ef4444'; // Default to green for zero
+};
+
+// Format P&L value for display
+export const formatPnL = (value: number): string => {
+  if (Math.abs(value) >= 1000) {
+    return `$${(value / 1000).toFixed(1)}K`;
+  }
+  return `$${value.toFixed(2)}`;
+};
 
 // Export singleton instance
 export const chartDataCache = new ChartDataCache();

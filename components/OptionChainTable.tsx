@@ -1,11 +1,14 @@
 // Option Chain Table Component
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { OptionContract, fetchBTCPrice, fetchOptionChainData } from '../utils/deltaApi';
+import { OptionContract, fetchBTCPrice, fetchOptionChainData, getCurrentOptionPrice } from '../utils/deltaApi';
+import { Position, PositionManager, createPosition } from '../utils/positionManager';
 
 interface OptionChainTableProps {
   selectedDate: string;
   onSelectionChange: (selections: Selection[]) => void;
+  positionManager?: PositionManager;
+  onPositionChange?: (positions: Position[]) => void;
 }
 
 export interface Selection {
@@ -18,7 +21,9 @@ export interface Selection {
 
 export const OptionChainTable: React.FC<OptionChainTableProps> = ({
   selectedDate,
-  onSelectionChange
+  onSelectionChange,
+  positionManager,
+  onPositionChange
 }) => {
   const [optionData, setOptionData] = useState<{
     calls: OptionContract[];
@@ -32,6 +37,7 @@ export const OptionChainTable: React.FC<OptionChainTableProps> = ({
   const [btcPrice, setBtcPrice] = useState<number | null>(null);
   const [btcPriceLoading, setBtcPriceLoading] = useState(false);
   const [btcPriceError, setBtcPriceError] = useState<string | null>(null);
+  const [optionPositions, setOptionPositions] = useState<Record<string, Set<'long' | 'short'>>>({});
 
   const handleSelectionChange = useCallback((newSelections: Selection[]) => {
     setSelections(newSelections);
@@ -81,7 +87,7 @@ export const OptionChainTable: React.FC<OptionChainTableProps> = ({
     return () => {
       isMounted = false;
     };
-  }, [selectedDate, onSelectionChange]);
+  }, [selectedDate]);
 
   // Remove the reset of data loaded state to allow multiple date loading
   // This enables selections to persist across date switches
@@ -113,7 +119,7 @@ export const OptionChainTable: React.FC<OptionChainTableProps> = ({
   // Separate effect to handle onSelectionChange updates
   useEffect(() => {
     onSelectionChange(selections);
-  }, [selections, onSelectionChange]);
+  }, [selections]);
 
   const getStrikeRange = useMemo(() => {
     const allStrikes = [
@@ -143,6 +149,189 @@ export const OptionChainTable: React.FC<OptionChainTableProps> = ({
     if (!volume) return '-';
     return volume.toLocaleString();
   }, []);
+
+  // Buy/Sell handlers with immediate feedback
+  const [isProcessing, setIsProcessing] = useState<Record<string, boolean>>({});
+  
+  const handleBuyOption = useCallback(async (option: OptionContract, type: 'call' | 'put') => {
+    if (!positionManager) {
+      return;
+    }
+
+    const optionKey = `${option.symbol}-buy`;
+    
+    // Prevent double-clicks
+    if (isProcessing[optionKey]) return;
+    
+    const currentPosition = optionPositions[option.symbol];
+    const isCurrentlyLong = currentPosition ? currentPosition.has('long') : false;
+    const isCurrentlyShort = currentPosition ? currentPosition.has('short') : false;
+
+    try {
+      // Immediate UI feedback - show processing state
+      setIsProcessing(prev => ({ ...prev, [optionKey]: true }));
+
+      // If we have a short position, remove it first (flip behavior)
+      if (isCurrentlyShort) {
+        const positionsToRemove = positionManager.getAllPositions().filter(
+          pos => pos.symbol === option.symbol && pos.position === 'short'
+        );
+        positionsToRemove.forEach(pos => positionManager.removePosition(pos.id));
+      }
+
+      // Remove existing long position if it exists (toggle off)
+      if (isCurrentlyLong) {
+        const positionsToRemove = positionManager.getAllPositions().filter(
+          pos => pos.symbol === option.symbol && pos.position === 'long'
+        );
+        positionsToRemove.forEach(pos => positionManager.removePosition(pos.id));
+        
+        // Clear position tracking if no positions remain
+        setOptionPositions(prev => {
+          const newPositions = { ...prev };
+          delete newPositions[option.symbol];
+          return newPositions;
+        });
+      } else {
+        // Add new long position - use fallback price for immediate response
+        const fallbackPrice = parseFloat(option.ask_price || '') || parseFloat(option.bid_price || '') || 0.01;
+        
+        const selection: Selection = {
+          type,
+          symbol: option.symbol,
+          strike: parseFloat(option.strike_price),
+          price: fallbackPrice.toString(),
+          settlementDate: selectedDate
+        };
+
+        // Create long position immediately
+        const position = createPosition(selection, 'long', 1, fallbackPrice);
+        positionManager.addPosition(position);
+        
+        // Track position for visual indicator
+        setOptionPositions(prev => {
+          const currentSet = prev[option.symbol] || new Set();
+          const newSet = new Set(currentSet);
+          newSet.add('long');
+          return {
+            ...prev,
+            [option.symbol]: newSet
+          };
+        });
+      }
+        
+      // Notify parent immediately
+      if (onPositionChange) {
+        onPositionChange(positionManager.getAllPositions());
+      }
+
+      // Update price in background (non-blocking) - only if we added a new position
+      if (!isCurrentlyLong) {
+        getCurrentOptionPrice(option.symbol).then(currentPrice => {
+          if (currentPrice > 0) {
+            console.log(`Price updated for ${option.symbol}: ${currentPrice}`);
+          }
+        }).catch(err => {
+          console.warn(`Failed to update price for ${option.symbol}:`, err);
+        });
+      }
+    } catch (err) {
+      console.error(`Error ${isCurrentlyLong ? 'removing' : 'buying'} ${option.symbol}:`, err);
+    } finally {
+      // Clear processing state
+      setIsProcessing(prev => ({ ...prev, [optionKey]: false }));
+    }
+  }, [positionManager, onPositionChange, selectedDate, optionPositions, isProcessing]);
+
+  const handleSellOption = useCallback(async (option: OptionContract, type: 'call' | 'put') => {
+    if (!positionManager) {
+      return;
+    }
+
+    const optionKey = `${option.symbol}-sell`;
+    
+    // Prevent double-clicks
+    if (isProcessing[optionKey]) return;
+    
+    const currentPosition = optionPositions[option.symbol];
+    const isCurrentlyLong = currentPosition ? currentPosition.has('long') : false;
+    const isCurrentlyShort = currentPosition ? currentPosition.has('short') : false;
+
+    try {
+      // Immediate UI feedback - show processing state
+      setIsProcessing(prev => ({ ...prev, [optionKey]: true }));
+
+      // If we have a long position, remove it first (flip behavior)
+      if (isCurrentlyLong) {
+        const positionsToRemove = positionManager.getAllPositions().filter(
+          pos => pos.symbol === option.symbol && pos.position === 'long'
+        );
+        positionsToRemove.forEach(pos => positionManager.removePosition(pos.id));
+      }
+
+      // Remove existing short position if it exists (toggle off)
+      if (isCurrentlyShort) {
+        const positionsToRemove = positionManager.getAllPositions().filter(
+          pos => pos.symbol === option.symbol && pos.position === 'short'
+        );
+        positionsToRemove.forEach(pos => positionManager.removePosition(pos.id));
+        
+        // Clear position tracking if no positions remain
+        setOptionPositions(prev => {
+          const newPositions = { ...prev };
+          delete newPositions[option.symbol];
+          return newPositions;
+        });
+      } else {
+        // Add new short position - use fallback price for immediate response
+        const fallbackPrice = parseFloat(option.ask_price || '') || parseFloat(option.bid_price || '') || 0.01;
+
+        const selection: Selection = {
+          type,
+          symbol: option.symbol,
+          strike: parseFloat(option.strike_price),
+          price: fallbackPrice.toString(),
+          settlementDate: selectedDate
+        };
+
+        // Create short position immediately
+        const position = createPosition(selection, 'short', 1, fallbackPrice);
+        positionManager.addPosition(position);
+        
+        // Track position for visual indicator
+        setOptionPositions(prev => {
+          const currentSet = prev[option.symbol] || new Set();
+          const newSet = new Set(currentSet);
+          newSet.add('short');
+          return {
+            ...prev,
+            [option.symbol]: newSet
+          };
+        });
+      }
+        
+      // Notify parent immediately
+      if (onPositionChange) {
+        onPositionChange(positionManager.getAllPositions());
+      }
+
+      // Update price in background (non-blocking) - only if we added a new position
+      if (!isCurrentlyShort) {
+        getCurrentOptionPrice(option.symbol).then(currentPrice => {
+          if (currentPrice > 0) {
+            console.log(`Price updated for ${option.symbol}: ${currentPrice}`);
+          }
+        }).catch(err => {
+          console.warn(`Failed to update price for ${option.symbol}:`, err);
+        });
+      }
+    } catch (err) {
+      console.error(`Error ${isCurrentlyShort ? 'removing' : 'selling'} ${option.symbol}:`, err);
+    } finally {
+      // Clear processing state
+      setIsProcessing(prev => ({ ...prev, [optionKey]: false }));
+    }
+  }, [positionManager, onPositionChange, selectedDate, optionPositions, isProcessing]);
 
   // Fetch BTC price
   const loadBTCPrice = useCallback(async () => {
@@ -195,10 +384,10 @@ export const OptionChainTable: React.FC<OptionChainTableProps> = ({
     };
   }, [optionData.calls, optionData.puts]);
 
-  // Load BTC price when component mounts
+  // Load BTC price when component mounts and when selectedDate changes (for fresh price)
   useEffect(() => {
     loadBTCPrice();
-  }, [loadBTCPrice]);
+  }, [selectedDate]);
 
   // Helper function to get filtered calls
   const getFilteredCalls = useMemo(() => {
@@ -326,6 +515,13 @@ export const OptionChainTable: React.FC<OptionChainTableProps> = ({
               const isCurrentStrike = currentStrike === strike;
               const isCallSelected = isSelected(call.symbol);
               const isPutSelected = put ? isSelected(put.symbol) : false;
+              const callPosition = optionPositions[call.symbol];
+              const putPosition = put ? optionPositions[put.symbol] : null;
+              
+              // Determine row status based on any position in the row
+              const hasLongPosition = (callPosition && callPosition.has('long')) || (putPosition && putPosition.has('long'));
+              const hasShortPosition = (callPosition && callPosition.has('short')) || (putPosition && putPosition.has('short'));
+              const hasAnyPosition = (callPosition && callPosition.size > 0) || (putPosition && putPosition.size > 0);
               
               return (
                 <tr
@@ -336,36 +532,75 @@ export const OptionChainTable: React.FC<OptionChainTableProps> = ({
                     ${isHighlighted && !isCurrentStrike ? 'bg-blue-50' : ''}
                     ${(isCallSelected || isPutSelected) && !isCurrentStrike ? 'ring-2 ring-blue-300 bg-blue-25' : ''}
                     ${isCurrentStrike && (isCallSelected || isPutSelected) ? 'ring-2 ring-yellow-300 bg-yellow-100' : ''}
+                    ${hasLongPosition ? 'bg-green-50 border-l-4 border-green-400' : ''}
+                    ${hasShortPosition ? 'bg-red-50 border-l-4 border-red-400' : ''}
+                    ${hasAnyPosition && !hasLongPosition && !hasShortPosition ? 'ring-2 ring-purple-300' : ''}
                     hover:bg-gray-50
                   `}
                   onMouseEnter={() => setHoveredStrike(strike)}
                   onMouseLeave={() => setHoveredStrike(null)}
                 >
-                  {/* Call Symbol */}
+                  {/* Call Symbol with Buy/Sell Buttons */}
                   <td className="px-2 py-2">
-                    <button
-                      onClick={() => handleCellClick(call, 'call')}
-                      className={`
-                        w-full text-left px-2 py-2 rounded text-xs font-medium transition-all duration-200
-                        ${isCallSelected
-                          ? 'bg-green-600 text-white shadow-md ring-1 ring-green-400'
-                          : 'bg-green-50 text-green-800 hover:bg-green-100 hover:shadow-sm border border-green-200'
-                        }
-                      `}
-                      title={`Click to select ${call.symbol} (Call)`}
-                    >
-                      <div className="font-mono text-xs">
-                        {call.symbol}
-                      </div>
-                      {isCallSelected && (
-                        <div className="flex items-center mt-1">
-                          <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 20 20">
-                            <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
-                          </svg>
-                          <span className="ml-1 text-xs">✓</span>
+                    <div className="space-y-1">
+                      <div className="flex items-center justify-between">
+                        <div className="font-mono text-xs text-gray-600">
+                          {call.symbol}
                         </div>
-                      )}
-                    </button>
+                        {/* Position Indicator */}
+                        {callPosition && (
+                          <span className={`inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium ${
+                            callPosition.has('long') && callPosition.has('short')
+                              ? 'bg-purple-100 text-purple-800'
+                              : callPosition.has('long')
+                              ? 'bg-green-100 text-green-800'
+                              : 'bg-red-100 text-red-800'
+                          }`}>
+                            {callPosition.has('long') && callPosition.has('short')
+                              ? 'BOTH'
+                              : callPosition.has('long') ? 'LONG' : 'SHORT'}
+                          </span>
+                        )}
+                      </div>
+                      <div className="flex space-x-1">
+                        <button
+                          onClick={() => handleBuyOption(call, 'call')}
+                          disabled={isProcessing[`${call.symbol}-buy`]}
+                          className={`flex-1 px-2 py-1 text-xs font-medium rounded transition-all duration-200 ${
+                            callPosition && callPosition.has('long')
+                              ? 'text-white bg-green-700 shadow-lg ring-2 ring-green-400'
+                              : isProcessing[`${call.symbol}-buy`]
+                              ? 'text-white bg-gray-400 cursor-not-allowed'
+                              : 'text-white bg-green-600 hover:bg-green-700'
+                          }`}
+                          title={`${callPosition && callPosition.has('long') ? 'Remove' : 'Buy'} Call ${call.strike_price}`}
+                        >
+                          {isProcessing[`${call.symbol}-buy`] ? '...' : 'BUY'}
+                        </button>
+                        <button
+                          onClick={() => handleSellOption(call, 'call')}
+                          disabled={isProcessing[`${call.symbol}-sell`]}
+                          className={`flex-1 px-2 py-1 text-xs font-medium rounded transition-all duration-200 ${
+                            callPosition && callPosition.has('short')
+                              ? 'text-white bg-red-700 shadow-lg ring-2 ring-red-400'
+                              : isProcessing[`${call.symbol}-sell`]
+                              ? 'text-white bg-gray-400 cursor-not-allowed'
+                              : 'text-white bg-red-600 hover:bg-red-700'
+                          }`}
+                          title={`${callPosition && callPosition.has('short') ? 'Remove' : 'Sell'} Call ${call.strike_price}`}
+                        >
+                          {isProcessing[`${call.symbol}-sell`] ? '...' : 'SELL'}
+                        </button>
+                      </div>
+                      {/* Price display */}
+                      <div className="text-xs text-gray-500 text-center">
+                        <span className="animate-pulse text-yellow-600" title="Fetching live price...">
+                          ...
+                        </span>
+                        {/* We'll fetch live price dynamically for BUY/SELL actions */}
+                        <span className="text-xs text-gray-400">click BUY/SELL</span>
+                      </div>
+                    </div>
                   </td>
                   
                   {/* Strike Price */}
@@ -385,32 +620,68 @@ export const OptionChainTable: React.FC<OptionChainTableProps> = ({
                     </div>
                   </td>
                   
-                  {/* Put Symbol */}
+                  {/* Put Symbol with Buy/Sell Buttons */}
                   <td className="px-2 py-2">
                     {put ? (
-                      <button
-                        onClick={() => handleCellClick(put, 'put')}
-                        className={`
-                          w-full text-right px-2 py-2 rounded text-xs font-medium transition-all duration-200
-                          ${isPutSelected
-                            ? 'bg-red-600 text-white shadow-md ring-1 ring-red-400'
-                            : 'bg-red-50 text-red-800 hover:bg-red-100 hover:shadow-sm border border-red-200'
-                          }
-                        `}
-                        title={`Click to select ${put.symbol} (Put)`}
-                      >
-                        <div className="font-mono text-xs">
-                          {put.symbol}
-                        </div>
-                        {isPutSelected && (
-                          <div className="flex items-center justify-end mt-1">
-                            <span className="mr-1 text-xs">✓</span>
-                            <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 20 20">
-                              <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
-                            </svg>
+                      <div className="space-y-1">
+                        <div className="flex items-center justify-between">
+                          <div className="font-mono text-xs text-gray-600">
+                            {put.symbol}
                           </div>
-                        )}
-                      </button>
+                          {/* Position Indicator */}
+                          {optionPositions[put.symbol] && (
+                            <span className={`inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium ${
+                              optionPositions[put.symbol].has('long') && optionPositions[put.symbol].has('short')
+                                ? 'bg-purple-100 text-purple-800'
+                                : optionPositions[put.symbol].has('long')
+                                ? 'bg-green-100 text-green-800'
+                                : 'bg-red-100 text-red-800'
+                            }`}>
+                              {optionPositions[put.symbol].has('long') && optionPositions[put.symbol].has('short')
+                                ? 'BOTH'
+                                : optionPositions[put.symbol].has('long') ? 'LONG' : 'SHORT'}
+                            </span>
+                          )}
+                        </div>
+                        <div className="flex space-x-1">
+                          <button
+                            onClick={() => handleBuyOption(put, 'put')}
+                            disabled={isProcessing[`${put.symbol}-buy`]}
+                            className={`flex-1 px-2 py-1 text-xs font-medium rounded transition-all duration-200 ${
+                              putPosition && putPosition.has('long')
+                                ? 'text-white bg-green-700 shadow-lg ring-2 ring-green-400'
+                                : isProcessing[`${put.symbol}-buy`]
+                                ? 'text-white bg-gray-400 cursor-not-allowed'
+                                : 'text-white bg-green-600 hover:bg-green-700'
+                            }`}
+                            title={`${putPosition && putPosition.has('long') ? 'Remove' : 'Buy'} Put ${put.strike_price}`}
+                          >
+                            {isProcessing[`${put.symbol}-buy`] ? '...' : 'BUY'}
+                          </button>
+                          <button
+                            onClick={() => handleSellOption(put, 'put')}
+                            disabled={isProcessing[`${put.symbol}-sell`]}
+                            className={`flex-1 px-2 py-1 text-xs font-medium rounded transition-all duration-200 ${
+                              putPosition && putPosition.has('short')
+                                ? 'text-white bg-red-700 shadow-lg ring-2 ring-red-400'
+                                : isProcessing[`${put.symbol}-sell`]
+                                ? 'text-white bg-gray-400 cursor-not-allowed'
+                                : 'text-white bg-red-600 hover:bg-red-700'
+                            }`}
+                            title={`${putPosition && putPosition.has('short') ? 'Remove' : 'Sell'} Put ${put.strike_price}`}
+                          >
+                            {isProcessing[`${put.symbol}-sell`] ? '...' : 'SELL'}
+                          </button>
+                        </div>
+                        {/* Price display */}
+                        <div className="text-xs text-gray-500 text-center">
+                          <span className="animate-pulse text-yellow-600" title="Fetching live price...">
+                            ...
+                          </span>
+                          {/* We'll fetch live price dynamically for BUY/SELL actions */}
+                          <span className="text-xs text-gray-400">click BUY/SELL</span>
+                        </div>
+                      </div>
                     ) : (
                       <div className="text-gray-400 text-center py-2 text-xs">No Put</div>
                     )}

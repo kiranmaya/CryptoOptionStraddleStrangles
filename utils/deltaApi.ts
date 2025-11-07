@@ -382,3 +382,53 @@ export const fetchBTCPrice = async (): Promise<number> => {
     throw err; // Re-throw to show real error instead of falling back to mock data
   }
 };
+
+// Fetch ticker data for a specific option symbol
+export const fetchOptionTicker = async (symbol: string): Promise<{
+  mark_price: string;
+  bid_price: string;
+  ask_price: string;
+  change_24h: string;
+  volume_24h: string;
+} | null> => {
+  try {
+    const response = await fetchWithRetry(`https://api.india.delta.exchange/v2/tickers/${symbol}`);
+    const data = await response.json();
+    
+    if (data.success && data.result) {
+      return {
+        mark_price: data.result.mark_price,
+        bid_price: data.result.bid_price,
+        ask_price: data.result.ask_price,
+        change_24h: data.result.change_24h,
+        volume_24h: data.result.volume_24h
+      };
+    }
+    
+    console.warn(`No ticker data found for symbol: ${symbol}`);
+    return null;
+  } catch (err) {
+    console.error(`Error fetching ticker for ${symbol}:`, err);
+    return null;
+  }
+};
+
+// Get current option price (tries multiple price sources)
+export const getCurrentOptionPrice = async (symbol: string): Promise<number> => {
+  const ticker = await fetchOptionTicker(symbol);
+  
+  if (ticker) {
+    // Prefer mark_price for BUY, ask_price for accurate pricing
+    if (ticker.mark_price) {
+      return parseFloat(ticker.mark_price);
+    }
+    if (ticker.ask_price) {
+      return parseFloat(ticker.ask_price);
+    }
+    if (ticker.bid_price) {
+      return parseFloat(ticker.bid_price);
+    }
+  }
+  
+  throw new Error(`No price data available for ${symbol}`);
+};

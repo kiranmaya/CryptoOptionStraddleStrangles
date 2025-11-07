@@ -118,7 +118,7 @@ const synchronizeDataWithOptions = async (
   return synchronizedBtcData;
 };
 
-export const CombinedChart: React.FC<CombinedChartProps> = ({
+export const CombinedCandleSticksChart: React.FC<CombinedChartProps> = ({
   selections,
   calculationMethod,
   onCalculationChange
@@ -536,27 +536,42 @@ export const CombinedChart: React.FC<CombinedChartProps> = ({
       if (chartData.length > 0) {
         console.log(`[CombinedChart] Setting ${chartData.length} data points to chart`);
         
-        const formattedData = chartData.map(candle => ({
-          time: candle.time as UTCTimestamp,
-          open: candle.open,
-          high: candle.high,
-          low: candle.low,
-          close: candle.close,
-        }));
+        // Ensure data is properly sorted by time before setting to chart
+        const sortedFormattedData = chartData
+          .map(candle => ({
+            time: candle.time as UTCTimestamp,
+            open: candle.open,
+            high: candle.high,
+            low: candle.low,
+            close: candle.close,
+          }))
+          .sort((a, b) => a.time - b.time);
 
-        console.log(`[CombinedChart] First candle:`, formattedData[0]);
-        console.log(`[CombinedChart] Last candle:`, formattedData[formattedData.length - 1]);
+        // Validate data order and remove any potential duplicates
+        const validatedData = sortedFormattedData.filter((candle, index, arr) => {
+          if (index > 0 && candle.time <= arr[index - 1].time) {
+            console.warn(`[CombinedChart] Data ordering issue detected at index ${index}, time: ${candle.time}, prev: ${arr[index - 1].time}`);
+            return false;
+          }
+          return true;
+        });
 
-        optionsSeriesRef.current.setData(formattedData);
+        console.log(`[CombinedChart] First candle:`, validatedData[0]);
+        console.log(`[CombinedChart] Last candle:`, validatedData[validatedData.length - 1]);
+        console.log(`[CombinedChart] Data validation: ${validatedData.length}/${sortedFormattedData.length} candles passed validation`);
+
+        optionsSeriesRef.current.setData(validatedData);
         // Calculate and set CCI1 data for combined options
         if (optionsCciSeriesRef.current) {
           const calculatedCCIi = calculateCCI(chartData);
           setOptionsCciData(calculatedCCIi);
           
-          const cciFormattedData = calculatedCCIi.map(cci => ({
-            time: cci.time as UTCTimestamp,
-            value: cci.value,
-          }));
+          const cciFormattedData = calculatedCCIi
+            .map(cci => ({
+              time: cci.time as UTCTimestamp,
+              value: cci.value,
+            }))
+            .sort((a, b) => a.time - b.time);
           
           optionsCciSeriesRef.current.setData(cciFormattedData);
           
@@ -592,25 +607,40 @@ export const CombinedChart: React.FC<CombinedChartProps> = ({
     if (!btcSeriesRef.current) return;
 
     if (btcData.length > 0) {
-      const formattedData = btcData.map(candle => ({
-        time: candle.time as UTCTimestamp,
-        open: candle.open,
-        high: candle.high,
-        low: candle.low,
-        close: candle.close,
-      }));
+      // Ensure BTC data is properly sorted by time before setting to chart
+      const sortedFormattedBtcData = btcData
+        .map(candle => ({
+          time: candle.time as UTCTimestamp,
+          open: candle.open,
+          high: candle.high,
+          low: candle.low,
+          close: candle.close,
+        }))
+        .sort((a, b) => a.time - b.time);
 
-      btcSeriesRef.current.setData(formattedData);
+      // Validate BTC data order and remove any potential duplicates
+      const validatedBtcData = sortedFormattedBtcData.filter((candle, index, arr) => {
+        if (index > 0 && candle.time <= arr[index - 1].time) {
+          console.warn(`[CombinedChart] BTC data ordering issue detected at index ${index}, time: ${candle.time}, prev: ${arr[index - 1].time}`);
+          return false;
+        }
+        return true;
+      });
+
+      console.log(`[CombinedChart] BTC data validation: ${validatedBtcData.length}/${sortedFormattedBtcData.length} candles passed validation`);
+      btcSeriesRef.current.setData(validatedBtcData);
       
       // Calculate CCI2 for BTC
       if (btcCciSeriesRef.current) {
         const calculatedBtcCCI = calculateCCI(btcData);
         setBtcCciData(calculatedBtcCCI);
         
-        const btcCciFormattedData = calculatedBtcCCI.map(cci => ({
-          time: cci.time as UTCTimestamp,
-          value: cci.value,
-        }));
+        const btcCciFormattedData = calculatedBtcCCI
+          .map(cci => ({
+            time: cci.time as UTCTimestamp,
+            value: cci.value,
+          }))
+          .sort((a, b) => a.time - b.time);
         
         btcCciSeriesRef.current.setData(btcCciFormattedData);
         console.log(`[CombinedChart] Set ${calculatedBtcCCI.length} CCI2 (BTC) data points`);

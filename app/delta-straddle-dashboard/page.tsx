@@ -5,10 +5,13 @@
 import { useState } from 'react';
 import { BtcChart } from '../../components/BtcChart';
 import { ChartSection } from '../../components/ChartContainer';
-import { CombinedChart } from '../../components/CombinedChart';
+import { CombinedCandleSticksChart } from '../../components/CombinedCandleSticksChart';
 import { OptionChainTable, Selection } from '../../components/OptionChainTable';
+ 
+import { SimplePnLChart } from '@/components/OptionsStratgyBuilderPnLChart';
 import { SettlementDateTabs } from '../../components/SettlementDateTabs';
 import { CalculationMethod } from '../../utils/chartHelpers';
+import { Position, PositionManager } from '../../utils/positionManager';
 
 export default function DeltaStraddleDashboard() {
   // State management
@@ -16,6 +19,8 @@ export default function DeltaStraddleDashboard() {
   const [selections, setSelections] = useState<Selection[]>([]);
   const [calculationMethod, setCalculationMethod] = useState<CalculationMethod>('sum');
   const [isFullscreen, setIsFullscreen] = useState(true);
+  const [positionManager] = useState(() => new PositionManager());
+  const [positions, setPositions] = useState<Position[]>([]);
 
   // Handle date selection
   const handleDateSelect = (date: string) => {
@@ -27,6 +32,11 @@ export default function DeltaStraddleDashboard() {
   // Handle option selection changes
   const handleSelectionChange = (newSelections: Selection[]) => {
     setSelections(newSelections);
+  };
+
+  // Handle position changes
+  const handlePositionChange = (newPositions: Position[]) => {
+    setPositions(newPositions);
   };
 
   // Handle calculation method changes
@@ -100,6 +110,8 @@ export default function DeltaStraddleDashboard() {
                 <OptionChainTable
                   selectedDate={selectedDate}
                   onSelectionChange={handleSelectionChange}
+                  positionManager={positionManager}
+                  onPositionChange={handlePositionChange}
                 />
               ) : (
                 <div className="flex items-center justify-center h-96 bg-gray-50 rounded-lg">
@@ -120,10 +132,20 @@ export default function DeltaStraddleDashboard() {
           {/* Right Column - Charts */}
           <div className={`${isFullscreen ? 'xl:col-span-5' : 'lg:col-span-1'} space-y-6`}>
             {/* Combined Options Chart */}
-            <CombinedChart
-              selections={selections}
+            <CombinedCandleSticksChart
+              selections={[...selections, ...positions.map(pos => ({
+                type: pos.type,
+                symbol: pos.symbol,
+                strike: pos.strike,
+                settlementDate: pos.settlementDate
+              }))]}
               calculationMethod={calculationMethod}
               onCalculationChange={handleCalculationMethodChange}
+            />
+
+            {/* Portfolio P&L Chart */}
+            <SimplePnLChart
+              positions={positions}
             />
 
             {/* BTC Price Chart */}
