@@ -11,8 +11,17 @@ import {
   UTCTimestamp
 } from 'lightweight-charts';
 import { useEffect, useRef, useState } from 'react';
+import {
+  calculatePriceRange,
+  detectStrategy,
+  formatPnL,
+  generatePnLCurve,
+  PnLDataPoint,
+  StrategyInfo
+} from '../utils/chartHelpers';
 import { fetchBTCPrice } from '../utils/deltaApi';
 import { Position } from '../utils/positionManager';
+import { Selection } from './OptionChainTable';
 
 interface StrategyBuilderChartProps {
   selections: Selection[];
@@ -20,7 +29,8 @@ interface StrategyBuilderChartProps {
 }
 
 export const StrategyBuilderChart: React.FC<StrategyBuilderChartProps> = ({
-  selections
+  selections,
+  positions = []
 }) => {
   const chartContainerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);

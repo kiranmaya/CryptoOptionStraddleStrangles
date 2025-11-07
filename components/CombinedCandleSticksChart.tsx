@@ -566,18 +566,27 @@ export const CombinedCandleSticksChart: React.FC<CombinedChartProps> = ({
           const calculatedCCIi = calculateCCI(chartData);
           setOptionsCciData(calculatedCCIi);
           
+          // Deduplicate CCI data by time, keeping the last occurrence
           const cciFormattedData = calculatedCCIi
             .map(cci => ({
               time: cci.time as UTCTimestamp,
               value: cci.value,
             }))
-            .sort((a, b) => a.time - b.time);
+            .sort((a, b) => a.time - b.time)
+            .filter((cci, index, arr) => {
+              // Remove duplicates by keeping only the last occurrence of each time
+              if (index > 0 && cci.time === arr[index - 1].time) {
+                console.warn(`[CombinedChart] Removing duplicate CCI1 data point at index ${index}, time: ${cci.time}`);
+                return false;
+              }
+              return true;
+            });
           
           optionsCciSeriesRef.current.setData(cciFormattedData);
           
           // CCI reference lines (+100 and -100) are already created permanently in initialization
           // No need to recreate them here - they remain fixed throughout chart lifetime
-          console.log(`[CombinedChart] Set ${calculatedCCIi.length} CCI1 data points`);
+          console.log(`[CombinedChart] Set ${cciFormattedData.length} CCI1 data points (${calculatedCCIi.length} - duplicates removed)`);
         }
         
         // Force chart to fit content and auto-scale price scales
@@ -635,15 +644,24 @@ export const CombinedCandleSticksChart: React.FC<CombinedChartProps> = ({
         const calculatedBtcCCI = calculateCCI(btcData);
         setBtcCciData(calculatedBtcCCI);
         
+        // Deduplicate BTC CCI data by time, keeping the last occurrence
         const btcCciFormattedData = calculatedBtcCCI
           .map(cci => ({
             time: cci.time as UTCTimestamp,
             value: cci.value,
           }))
-          .sort((a, b) => a.time - b.time);
+          .sort((a, b) => a.time - b.time)
+          .filter((cci, index, arr) => {
+            // Remove duplicates by keeping only the last occurrence of each time
+            if (index > 0 && cci.time === arr[index - 1].time) {
+              console.warn(`[CombinedChart] Removing duplicate BTC CCI data point at index ${index}, time: ${cci.time}`);
+              return false;
+            }
+            return true;
+          });
         
         btcCciSeriesRef.current.setData(btcCciFormattedData);
-        console.log(`[CombinedChart] Set ${calculatedBtcCCI.length} CCI2 (BTC) data points`);
+        console.log(`[CombinedChart] Set ${btcCciFormattedData.length} CCI2 (BTC) data points (${calculatedBtcCCI.length} - duplicates removed)`);
         
         // CCI reference lines (+100 and -100) are already created permanently in initialization
         // No need to recreate them here - they remain fixed throughout chart lifetime

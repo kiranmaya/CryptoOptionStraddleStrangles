@@ -7,6 +7,7 @@ import { BtcChart } from '../../components/BtcChart';
 import { ChartSection } from '../../components/ChartContainer';
 import { CombinedCandleSticksChart } from '../../components/CombinedCandleSticksChart';
 import { OptionChainTable, Selection } from '../../components/OptionChainTable';
+import { StrategyBuilderChart } from '../../components/StrategyBuilderChart';
  
 import { SimplePnLChart } from '@/components/OptionsStratgyBuilderPnLChart';
 import { SettlementDateTabs } from '../../components/SettlementDateTabs';
@@ -100,7 +101,7 @@ export default function DeltaStraddleDashboard() {
         {/* Main Dashboard Grid */}
         <div className={`${isFullscreen ? 'grid grid-cols-1 xl:grid-cols-6 gap-4' : 'grid grid-cols-1 lg:grid-cols-2 gap-6'}`}>
           {/* Left Column - Option Chain Table */}
-          <div className={`${isFullscreen ? 'lg:col-span-1' : 'lg:col-span-1'}`}>
+          <div className={`${isFullscreen ? 'xl:col-span-2' : 'lg:col-span-1'}`}>
             <ChartSection
               title="Option Chain"
               description="Click cells to select options for straddle/strangle analysis"
@@ -130,7 +131,7 @@ export default function DeltaStraddleDashboard() {
           </div>
 
           {/* Right Column - Charts */}
-          <div className={`${isFullscreen ? 'xl:col-span-5' : 'lg:col-span-1'} space-y-6`}>
+          <div className={`${isFullscreen ? 'xl:col-span-4' : 'lg:col-span-1'} space-y-6`}>
             {/* Combined Options Chart */}
             <CombinedCandleSticksChart
               selections={[...selections, ...positions.map(pos => ({
@@ -141,6 +142,12 @@ export default function DeltaStraddleDashboard() {
               }))]}
               calculationMethod={calculationMethod}
               onCalculationChange={handleCalculationMethodChange}
+            />
+
+            {/* Strategy Builder Chart */}
+            <StrategyBuilderChart
+              selections={selections}
+              positions={positions}
             />
 
             {/* Portfolio P&L Chart */}

@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { OptionContract, fetchBTCPrice, fetchOptionChainData, getCurrentOptionPrice } from '../utils/deltaApi';
 import { Position, PositionManager, createPosition } from '../utils/positionManager';
+import { useDeltaWebSocket } from '../utils/websocketClient';
 
 interface OptionChainTableProps {
   selectedDate: string;
@@ -38,6 +39,23 @@ export const OptionChainTable: React.FC<OptionChainTableProps> = ({
   const [btcPriceLoading, setBtcPriceLoading] = useState(false);
   const [btcPriceError, setBtcPriceError] = useState<string | null>(null);
   const [optionPositions, setOptionPositions] = useState<Record<string, Set<'long' | 'short'>>>({});
+  const [selectedQuantities, setSelectedQuantities] = useState<Record<string, number>>({});
+  const [livePrices, setLivePrices] = useState<Map<string, { bid: number; ask: number; mark: number; timestamp: number }>>(new Map());
+  const [connectionStatus, setConnectionStatus] = useState<'connected' | 'disconnected' | 'connecting'>('connecting');
+  const [isPollingPrices, setIsPollingPrices] = useState(false);
+
+  // WebSocket hook
+  const { connected, subscribeTickers, onMessage, offMessage } = useDeltaWebSocket();
+
+  // Debug: Check WebSocket status
+  useEffect(() => {
+    console.log('🔌 WebSocket Status:', {
+      connected,
+      callsCount: optionData.calls.length,
+      putsCount: optionData.puts.length,
+      hasTickersHook: !!subscribeTickers
+    });
+  }, [connected, optionData.calls.length, optionData.puts.length, subscribeTickers]);
 
   const handleSelectionChange = useCallback((newSelections: Selection[]) => {
     setSelections(newSelections);
@@ -51,7 +69,7 @@ export const OptionChainTable: React.FC<OptionChainTableProps> = ({
 
   useEffect(() => {
     let isMounted = true;
-     
+      
     const loadOptionChain = async () => {
       if (!selectedDate) return;
       
@@ -166,6 +184,7 @@ export const OptionChainTable: React.FC<OptionChainTableProps> = ({
     const currentPosition = optionPositions[option.symbol];
     const isCurrentlyLong = currentPosition ? currentPosition.has('long') : false;
     const isCurrentlyShort = currentPosition ? currentPosition.has('short') : false;
+    const quantity = selectedQuantities[option.symbol] || 1;
 
     try {
       // Immediate UI feedback - show processing state
@@ -204,8 +223,8 @@ export const OptionChainTable: React.FC<OptionChainTableProps> = ({
           settlementDate: selectedDate
         };
 
-        // Create long position immediately
-        const position = createPosition(selection, 'long', 1, fallbackPrice);
+        // Create long position with selected quantity
+        const position = createPosition(selection, 'long', quantity, fallbackPrice);
         positionManager.addPosition(position);
         
         // Track position for visual indicator
@@ -241,7 +260,7 @@ export const OptionChainTable: React.FC<OptionChainTableProps> = ({
       // Clear processing state
       setIsProcessing(prev => ({ ...prev, [optionKey]: false }));
     }
-  }, [positionManager, onPositionChange, selectedDate, optionPositions, isProcessing]);
+  }, [positionManager, onPositionChange, selectedDate, optionPositions, isProcessing, selectedQuantities]);
 
   const handleSellOption = useCallback(async (option: OptionContract, type: 'call' | 'put') => {
     if (!positionManager) {
@@ -256,6 +275,7 @@ export const OptionChainTable: React.FC<OptionChainTableProps> = ({
     const currentPosition = optionPositions[option.symbol];
     const isCurrentlyLong = currentPosition ? currentPosition.has('long') : false;
     const isCurrentlyShort = currentPosition ? currentPosition.has('short') : false;
+    const quantity = selectedQuantities[option.symbol] || 1;
 
     try {
       // Immediate UI feedback - show processing state
@@ -294,8 +314,8 @@ export const OptionChainTable: React.FC<OptionChainTableProps> = ({
           settlementDate: selectedDate
         };
 
-        // Create short position immediately
-        const position = createPosition(selection, 'short', 1, fallbackPrice);
+        // Create short position with selected quantity
+        const position = createPosition(selection, 'short', quantity, fallbackPrice);
         positionManager.addPosition(position);
         
         // Track position for visual indicator
@@ -331,7 +351,7 @@ export const OptionChainTable: React.FC<OptionChainTableProps> = ({
       // Clear processing state
       setIsProcessing(prev => ({ ...prev, [optionKey]: false }));
     }
-  }, [positionManager, onPositionChange, selectedDate, optionPositions, isProcessing]);
+  }, [positionManager, onPositionChange, selectedDate, optionPositions, isProcessing, selectedQuantities]);
 
   // Fetch BTC price
   const loadBTCPrice = useCallback(async () => {
@@ -388,6 +408,86 @@ export const OptionChainTable: React.FC<OptionChainTableProps> = ({
   useEffect(() => {
     loadBTCPrice();
   }, [selectedDate]);
+  // WebSocket price update handler
+  const handlePriceUpdate = useCallback((data: unknown) => {
+    const payload = data as Record<string, unknown>;
+    
+    console.log('💰 Raw price update received:', payload);
+    
+    // Handle v2/ticker payload structure
+    if (payload.symbol) {
+      const symbol = String(payload.symbol);
+      const timestamp = Date.now();
+      
+      // Extract bid, ask, and mark prices
+      const bid = payload.bid_price ? Number(payload.bid_price) :
+                 payload.bid ? Number(payload.bid) : 0;
+      const ask = payload.ask_price ? Number(payload.ask_price) :
+                 payload.ask ? Number(payload.ask) : 0;
+      const mark = payload.mark_price ? Number(payload.mark_price) :
+                   payload.price ? Number(payload.price) :
+                   payload.close ? Number(payload.close) : 0;
+      
+      if (bid > 0 || ask > 0 || mark > 0) {
+        // Remove MARK: prefix if present for storage
+        const cleanSymbol = symbol.startsWith('MARK:') ? symbol.substring(5) : symbol;
+        
+        setLivePrices(prev => new Map(prev).set(cleanSymbol, {
+          bid,
+          ask,
+          mark: mark || ask || bid,
+          timestamp
+        }));
+        
+        console.log(`✅ Live price update: ${cleanSymbol} = Bid: $${bid.toFixed(4)} Ask: $${ask.toFixed(4)} Mark: $${(mark || ask || bid).toFixed(4)}`);
+        
+        // Update BTC price if we get BTCUSD price
+        if (cleanSymbol === 'BTCUSD' && (mark || ask || bid) > 0) {
+          setBtcPrice(mark || ask || bid);
+        }
+      } else {
+        console.log(`⚠️ Zero or invalid prices for ${symbol}:`, { bid, ask, mark });
+      }
+    } else {
+      console.log('❌ Unrecognized price update format:', payload);
+    }
+  }, []);
+
+  // Subscribe to all option symbols and BTC price
+  useEffect(() => {
+    if (optionData.calls.length > 0 || optionData.puts.length > 0) {
+      // Collect all unique symbols with MARK: prefix for options
+      const allSymbols = [
+        'BTCUSD', // Always include BTC
+        ...optionData.calls.map(call => `MARK:${call.symbol}`),
+        ...optionData.puts.map(put => `MARK:${put.symbol}`)
+      ];
+      
+      // Remove duplicates
+      const uniqueSymbols = Array.from(new Set(allSymbols));
+      
+      console.log('🌐 Subscribing to ticker symbols:', uniqueSymbols);
+      console.log('📊 Option data loaded:', {
+        calls: optionData.calls.length,
+        puts: optionData.puts.length
+      });
+      
+      if (uniqueSymbols.length > 0) {
+        subscribeTickers(uniqueSymbols);
+      }
+    }
+  }, [optionData.calls, optionData.puts, subscribeTickers]);
+
+  // Set up message handlers
+  useEffect(() => {
+    onMessage('v2/ticker', handlePriceUpdate);
+    onMessage('ticker', handlePriceUpdate); // Also listen for the old format for compatibility
+    
+    return () => {
+      offMessage('v2/ticker', handlePriceUpdate);
+      offMessage('ticker', handlePriceUpdate);
+    };
+  }, [handlePriceUpdate, onMessage, offMessage]);
 
   // Helper function to get filtered calls
   const getFilteredCalls = useMemo(() => {
@@ -402,12 +502,94 @@ export const OptionChainTable: React.FC<OptionChainTableProps> = ({
     
     if (currentStrikeIndex === -1) return optionData.calls;
     
-    // Calculate range: current strike ± 12 strikes
+    // Calculate range: current strike ± 20 strikes
     const startIndex = Math.max(0, currentStrikeIndex - 20);
     const endIndex = Math.min(allCalls.length - 1, currentStrikeIndex + 20);
     
     return allCalls.slice(startIndex, endIndex + 1);
   }, [optionData.calls, currentStrike]);
+
+  // Fetch live price for a single symbol
+  const fetchLivePrice = useCallback(async (symbol: string) => {
+    try {
+      // Get ticker data for this symbol
+      const response = await fetch(`https://api.india.delta.exchange/v2/tickers/${symbol}`);
+      const data = await response.json();
+      
+      if (data.success && data.result) {
+        const bid = parseFloat(data.result.bid_price || '0');
+        const ask = parseFloat(data.result.ask_price || '0');
+        const mark = parseFloat(data.result.mark_price || '0');
+        
+        if (bid > 0 || ask > 0 || mark > 0) {
+          setLivePrices(prev => new Map(prev).set(symbol, {
+            bid,
+            ask,
+            mark: mark || ask || bid,
+            timestamp: Date.now()
+          }));
+        }
+      }
+    } catch (err) {
+      console.warn(`Failed to fetch live price for ${symbol}:`, err);
+    }
+  }, []);
+
+  // Poll for all visible option prices
+  const pollAllPrices = useCallback(async () => {
+    if (isPollingPrices || optionData.calls.length === 0) return;
+    
+    setIsPollingPrices(true);
+    
+    try {
+      // Get all symbols that are visible in the table
+      const allVisibleSymbols = getFilteredCalls.map(call => call.symbol)
+        .concat(optionData.puts.map(put => put.symbol))
+        .filter(Boolean);
+      
+      // Add BTC price
+      allVisibleSymbols.push('BTCUSD');
+      
+      // Remove duplicates
+      const uniqueSymbols = Array.from(new Set(allVisibleSymbols));
+      
+      // Fetch prices for all symbols
+      await Promise.allSettled(
+        uniqueSymbols.map(symbol => fetchLivePrice(symbol))
+      );
+    } finally {
+      setIsPollingPrices(false);
+    }
+  }, [isPollingPrices, optionData.calls, optionData.puts, getFilteredCalls, fetchLivePrice]);
+
+  // Set up price polling
+  useEffect(() => {
+    if (isDataLoaded && optionData.calls.length > 0) {
+      // Initial price fetch
+      pollAllPrices();
+      
+      // Set up polling interval
+      const interval = setInterval(pollAllPrices, 30000); // Poll every 30 seconds
+      
+      return () => clearInterval(interval);
+    }
+  }, [isDataLoaded, pollAllPrices]);
+
+  // Get live price for a symbol (with fallback)
+  const getLivePrices = useCallback((symbol: string): { bid: number; ask: number; mark: number } => {
+    const livePrice = livePrices.get(symbol);
+    return livePrice ? {
+      bid: livePrice.bid,
+      ask: livePrice.ask,
+      mark: livePrice.mark
+    } : { bid: 0, ask: 0, mark: 0 };
+  }, [livePrices]);
+  
+  // Keep the original function for backward compatibility
+  const getLivePrice = useCallback((symbol: string): number => {
+    const livePrices = getLivePrices(symbol);
+    return livePrices.mark || livePrices.ask || livePrices.bid || 0;
+  }, [getLivePrices]);
 
   if (loading) {
     return (
@@ -562,6 +744,23 @@ export const OptionChainTable: React.FC<OptionChainTableProps> = ({
                           </span>
                         )}
                       </div>
+                      {/* Quantity Selector */}
+                      <div className="mb-2">
+                        <select
+                          value={selectedQuantities[call.symbol] || 1}
+                          onChange={(e) => setSelectedQuantities(prev => ({
+                            ...prev,
+                            [call.symbol]: parseInt(e.target.value)
+                          }))}
+                          className="w-full px-2 py-1 text-xs border border-gray-300 rounded bg-white text-gray-700"
+                        >
+                          {[...Array(10)].map((_, i) => (
+                            <option key={i + 1} value={i + 1}>
+                              Qty: {i + 1}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
                       <div className="flex space-x-1">
                         <button
                           onClick={() => handleBuyOption(call, 'call')}
@@ -573,7 +772,7 @@ export const OptionChainTable: React.FC<OptionChainTableProps> = ({
                               ? 'text-white bg-gray-400 cursor-not-allowed'
                               : 'text-white bg-green-600 hover:bg-green-700'
                           }`}
-                          title={`${callPosition && callPosition.has('long') ? 'Remove' : 'Buy'} Call ${call.strike_price}`}
+                          title={`${callPosition && callPosition.has('long') ? 'Remove' : 'Buy'} ${selectedQuantities[call.symbol] || 1} Call ${call.strike_price}`}
                         >
                           {isProcessing[`${call.symbol}-buy`] ? '...' : 'BUY'}
                         </button>
@@ -587,18 +786,54 @@ export const OptionChainTable: React.FC<OptionChainTableProps> = ({
                               ? 'text-white bg-gray-400 cursor-not-allowed'
                               : 'text-white bg-red-600 hover:bg-red-700'
                           }`}
-                          title={`${callPosition && callPosition.has('short') ? 'Remove' : 'Sell'} Call ${call.strike_price}`}
+                          title={`${callPosition && callPosition.has('short') ? 'Remove' : 'Sell'} ${selectedQuantities[call.symbol] || 1} Call ${call.strike_price}`}
                         >
                           {isProcessing[`${call.symbol}-sell`] ? '...' : 'SELL'}
                         </button>
                       </div>
-                      {/* Price display */}
+                      {/* Live Price display */}
                       <div className="text-xs text-gray-500 text-center">
-                        <span className="animate-pulse text-yellow-600" title="Fetching live price...">
-                          ...
-                        </span>
-                        {/* We'll fetch live price dynamically for BUY/SELL actions */}
-                        <span className="text-xs text-gray-400">click BUY/SELL</span>
+                        {(() => {
+                          const prices = getLivePrices(call.symbol);
+                          const hasLiveData = prices.bid > 0 || prices.ask > 0 || prices.mark > 0;
+                          
+                          if (hasLiveData) {
+                            return (
+                              <div>
+                                <div className="grid grid-cols-2 gap-1 text-xs">
+                                  <div className="text-right">
+                                    <div className="text-red-500 font-medium">
+                                      ${prices.bid.toFixed(4)}
+                                    </div>
+                                    <div className="text-xs text-gray-400">BID</div>
+                                  </div>
+                                  <div className="text-left">
+                                    <div className="text-green-500 font-medium">
+                                      ${prices.ask.toFixed(4)}
+                                    </div>
+                                    <div className="text-xs text-gray-400">ASK</div>
+                                  </div>
+                                </div>
+                                {prices.mark > 0 && (
+                                  <div className="text-xs text-gray-600 mt-1">
+                                    Mark: ${prices.mark.toFixed(4)}
+                                  </div>
+                                )}
+                              </div>
+                            );
+                          } else {
+                            return (
+                              <div>
+                                <span className="text-xs text-gray-400">
+                                  {optionData.calls.length > 0 ? 'No data' : '...'}
+                                </span>
+                                <div className="text-xs text-gray-300" title="MARK: prefix required">
+                                  Need: {`MARK:${call.symbol}`}
+                                </div>
+                              </div>
+                            );
+                          }
+                        })()}
                       </div>
                     </div>
                   </td>
@@ -643,6 +878,23 @@ export const OptionChainTable: React.FC<OptionChainTableProps> = ({
                             </span>
                           )}
                         </div>
+                        {/* Quantity Selector */}
+                        <div className="mb-2">
+                          <select
+                            value={selectedQuantities[put.symbol] || 1}
+                            onChange={(e) => setSelectedQuantities(prev => ({
+                              ...prev,
+                              [put.symbol]: parseInt(e.target.value)
+                            }))}
+                            className="w-full px-2 py-1 text-xs border border-gray-300 rounded bg-white text-gray-700"
+                          >
+                            {[...Array(10)].map((_, i) => (
+                              <option key={i + 1} value={i + 1}>
+                                Qty: {i + 1}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
                         <div className="flex space-x-1">
                           <button
                             onClick={() => handleBuyOption(put, 'put')}
@@ -654,7 +906,7 @@ export const OptionChainTable: React.FC<OptionChainTableProps> = ({
                                 ? 'text-white bg-gray-400 cursor-not-allowed'
                                 : 'text-white bg-green-600 hover:bg-green-700'
                             }`}
-                            title={`${putPosition && putPosition.has('long') ? 'Remove' : 'Buy'} Put ${put.strike_price}`}
+                            title={`${putPosition && putPosition.has('long') ? 'Remove' : 'Buy'} ${selectedQuantities[put.symbol] || 1} Put ${put.strike_price}`}
                           >
                             {isProcessing[`${put.symbol}-buy`] ? '...' : 'BUY'}
                           </button>
@@ -668,18 +920,53 @@ export const OptionChainTable: React.FC<OptionChainTableProps> = ({
                                 ? 'text-white bg-gray-400 cursor-not-allowed'
                                 : 'text-white bg-red-600 hover:bg-red-700'
                             }`}
-                            title={`${putPosition && putPosition.has('short') ? 'Remove' : 'Sell'} Put ${put.strike_price}`}
+                            title={`${putPosition && putPosition.has('short') ? 'Remove' : 'Sell'} ${selectedQuantities[put.symbol] || 1} Put ${put.strike_price}`}
                           >
                             {isProcessing[`${put.symbol}-sell`] ? '...' : 'SELL'}
                           </button>
                         </div>
-                        {/* Price display */}
+                        {/* Live Price display */}
                         <div className="text-xs text-gray-500 text-center">
-                          <span className="animate-pulse text-yellow-600" title="Fetching live price...">
-                            ...
-                          </span>
-                          {/* We'll fetch live price dynamically for BUY/SELL actions */}
-                          <span className="text-xs text-gray-400">click BUY/SELL</span>
+                          {(() => {
+                            const prices = getLivePrices(put.symbol);
+                            const hasLiveData = prices.bid > 0 || prices.ask > 0 || prices.mark > 0;
+                            
+                            if (hasLiveData) {
+                              return (
+                                <div>
+                                  <div className="grid grid-cols-2 gap-1 text-xs">
+                                    <div className="text-right">
+                                      <div className="text-red-500 font-medium">
+                                        ${prices.bid.toFixed(4)}
+                                      </div>
+                                      <div className="text-xs text-gray-400">BID</div>
+                                    </div>
+                                    <div className="text-left">
+                                      <div className="text-green-500 font-medium">
+                                        ${prices.ask.toFixed(4)}
+                                      </div>
+                                      <div className="text-xs text-gray-400">ASK</div>
+                                    </div>
+                                  </div>
+                                  {prices.mark > 0 && (
+                                    <div className="text-xs text-gray-600 mt-1">
+                                      Mark: ${prices.mark.toFixed(4)}
+                                    </div>
+                                  )}
+                                </div>
+                              );
+                            } else {
+                              return (
+                                <div>
+                                  <span className="text-xs text-gray-400">
+                                    {optionData.puts.length > 0 ? 'No data' : '...'}
+                                  </span>
+                                  
+                                  
+                                  </div>
+                              );
+                            }
+                          })()}
                         </div>
                       </div>
                     ) : (
